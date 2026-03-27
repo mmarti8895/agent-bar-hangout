@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent Bar Hangout</title>
+  <link rel="stylesheet" href="style.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <main class="app-shell">
+    <section class="bar-stage" aria-label="Agent bar hangout scene">
+      <canvas id="barCanvas" role="img" aria-label="3D bar scene with worker agents"></canvas>
+      <div id="hoverTooltip" class="hover-tooltip" role="status" aria-live="polite"></div>
+    </section>
+    <aside class="control-panel">
+      <section class="panel-block focus-agent" aria-live="polite">
+        <p class="eyebrow">Selected agent</p>
+        <h2 id="selectedAgentName">Choose an agent</h2>
+        <p id="selectedAgentRole" class="subtle">Click a sprite in the bar or use the roster.</p>
+        <div class="agent-meta">
+          <span class="pill" id="selectedAgentMood">Mood —</span>
+          <span class="pill status-pill" id="selectedAgentStatus">Status —</span>
+        </div>
+      </section>
+      <section class="panel-block task-form-block">
+        <h3>Assign new task</h3>
+        <form id="assignForm">
+          <label class="field">
+            <span>Task label</span>
+            <input type="text" id="taskLabel" name="taskLabel" required maxlength="60" placeholder="e.g., Compile daily metrics" />
+          </label>
+          <label class="field">
+            <span>Notes (optional)</span>
+            <textarea id="taskNotes" name="taskNotes" rows="2" maxlength="200" placeholder="Add any context..."></textarea>
+          </label>
+          <label class="field field-inline">
+            <span>ETA (min)</span>
+            <input type="number" id="taskEta" name="taskEta" min="1" max="240" placeholder="30" />
+          </label>
+          <button type="submit" class="primary-btn">Assign to agent</button>
+        </form>
+      </section>
+      <section class="panel-block">
+        <div class="section-head">
+          <h3>Active tasks</h3>
+          <span class="eyebrow" id="activeSummary">0 tasks</span>
+        </div>
+        <ul id="taskList" class="task-list" aria-live="polite"></ul>
+      </section>
+      <section class="panel-block history-block">
+        <div class="section-head">
+          <h3>History</h3>
+        </div>
+        <ul id="historyList" class="task-list history"></ul>
+      </section>
+      <section class="panel-block roster-block">
+        <div class="section-head">
+          <h3>Agent roster</h3>
+        </div>
+        <div id="rosterGrid" class="roster-grid" role="listbox" aria-label="Agent roster"></div>
+      </section>
+    </aside>
+    <div class="toast-stack" aria-live="assertive" aria-atomic="false"></div>
+  </main>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
