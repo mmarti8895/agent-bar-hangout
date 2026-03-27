@@ -299,3 +299,156 @@ input:focus, textarea:focus {
     padding-right: 0;
   }
 }
+
+/* ───────── MCP Adapters ───────── */
+.mcp-fieldset {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  padding: 0.6rem 0.75rem 0.5rem;
+  margin: 0 0 0.75rem 0;
+}
+
+.mcp-fieldset legend {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 0 0.3rem;
+}
+
+.mcp-checkbox-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem 0.6rem;
+}
+
+.mcp-checkbox-grid label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+  padding: 0.2rem 0;
+}
+
+.mcp-checkbox-grid label .mcp-icon {
+  font-size: 0.9rem;
+  width: 1.1em;
+  text-align: center;
+}
+
+.mcp-checkbox-grid input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+}
+
+.mcp-adapter-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.mcp-adapter-card {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 0.55rem 0.7rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.mcp-adapter-card .mcp-icon {
+  font-size: 1.3rem;
+  width: 1.6rem;
+  text-align: center;
+}
+
+.mcp-adapter-card .mcp-info {
+  flex: 1;
+}
+
+.mcp-adapter-card .mcp-info strong {
+  font-size: 0.85rem;
+  display: block;
+}
+
+.mcp-adapter-card .mcp-info span {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.mcp-adapter-card .mcp-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #44dd88;
+  box-shadow: 0 0 6px #44dd88;
+}
+
+/* ───────── Task progress log ───────── */
+.task-progress {
+  margin-top: 0.4rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.task-progress .progress-bar-track {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 0.3rem;
+}
+
+.task-progress .progress-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent), #44dd88);
+  transition: width 300ms ease;
+}
+
+.task-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 120px;
+  overflow-y: auto;
+  font-size: 0.7rem;
+  font-family: 'Consolas', 'Fira Code', monospace;
+  color: var(--text-muted);
+}
+
+.task-log li {
+  padding: 0.1rem 0;
+  display: flex;
+  gap: 0.4rem;
+  align-items: baseline;
+}
+
+.task-log li .log-icon {
+  flex-shrink: 0;
+}
+
+.task-log li.log-mcp { color: #22ccff; }
+.task-log li.log-verify { color: #44dd88; }
+.task-log li.log-done { color: var(--accent); font-weight: 600; }
+.task-log li.log-fail { color: var(--accent-strong); }
+
+.task-card .pill.status-working {
+  background: rgba(34, 204, 255, 0.15);
+  border-color: rgba(34, 204, 255, 0.3);
+  color: #22ccff;
+}
+
+.task-card .pill.status-verifying {
+  background: rgba(68, 221, 136, 0.15);
+  border-color: rgba(68, 221, 136, 0.3);
+  color: #44dd88;
+}
+
+.task-card .pill.status-done {
+  background: rgba(255, 179, 71, 0.15);
+  border-color: rgba(255, 179, 71, 0.3);
+  color: var(--accent);
+}

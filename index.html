@@ -41,6 +41,10 @@
             <span>Notes (optional)</span>
             <textarea id="taskNotes" name="taskNotes" rows="2" maxlength="200" placeholder="Add any context..."></textarea>
           </label>
+          <fieldset class="field mcp-fieldset">
+            <legend>MCP Adapters</legend>
+            <div id="mcpCheckboxes" class="mcp-checkbox-grid"></div>
+          </fieldset>
           <label class="field field-inline">
             <span>ETA (min)</span>
             <input type="number" id="taskEta" name="taskEta" min="1" max="240" placeholder="30" />
@@ -60,6 +64,13 @@
           <h3>History</h3>
         </div>
         <ul id="historyList" class="task-list history"></ul>
+      </section>
+      <section class="panel-block mcp-panel-block">
+        <div class="section-head">
+          <h3>MCP Adapters</h3>
+          <span class="eyebrow" id="mcpCount">0 available</span>
+        </div>
+        <div id="mcpAdapterList" class="mcp-adapter-list"></div>
       </section>
       <section class="panel-block roster-block">
         <div class="section-head">
