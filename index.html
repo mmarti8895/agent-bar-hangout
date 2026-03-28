@@ -16,10 +16,61 @@
 </head>
 <body>
   <main class="app-shell">
-    <section class="bar-stage" aria-label="Agent bar hangout scene">
-      <canvas id="barCanvas" role="img" aria-label="3D bar scene with worker agents"></canvas>
-      <div id="hoverTooltip" class="hover-tooltip" role="status" aria-live="polite"></div>
-    </section>
+    <div class="bar-column">
+      <section class="bar-stage" aria-label="Agent bar hangout scene">
+        <canvas id="barCanvas" role="img" aria-label="3D bar scene with worker agents"></canvas>
+        <div id="hoverTooltip" class="hover-tooltip" role="status" aria-live="polite"></div>
+      </section>
+      <div class="bar-column-row">
+        <section class="panel-block response-pane-block">
+          <div class="section-head">
+            <h3>Work Output</h3>
+            <button type="button" id="clearResponsePane" class="clear-btn" title="Clear output">Clear</button>
+          </div>
+          <div id="responsePane" class="response-pane" aria-live="polite" aria-label="Agent work output"></div>
+        </section>
+        <section class="panel-block history-block">
+          <div class="section-head">
+            <h3>History</h3>
+          </div>
+          <ul id="historyList" class="task-list history"></ul>
+        </section>
+      </div>
+      <section class="panel-block agent-output-block">
+        <div class="section-head">
+          <h3>Agent Output</h3>
+          <div class="section-head-right">
+            <span class="eyebrow" id="agentOutputLabel">No output yet</span>
+            <button type="button" id="clearAgentOutput" class="clear-btn" title="Clear output">Clear</button>
+          </div>
+        </div>
+        <div id="agentOutputPane" class="agent-output-pane" aria-live="polite" aria-label="Agent work results"></div>
+      </section>
+      <section class="panel-block activity-log-block">
+        <div class="section-head">
+          <h3>Activity Log</h3>
+          <div class="section-head-right">
+            <span class="eyebrow" id="logCount">0 entries</span>
+            <button type="button" id="clearLogBtn" class="clear-btn" title="Clear log">Clear</button>
+          </div>
+        </div>
+        <div class="activity-log-wrap">
+          <table class="activity-log" id="activityLogTable">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Agent</th>
+                <th>Type</th>
+                <th>Task</th>
+                <th>Details</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="activityLogBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
     <aside class="control-panel">
       <section class="panel-block focus-agent" aria-live="polite">
         <p class="eyebrow">Selected agent</p>
@@ -34,12 +85,12 @@
         <h3>Assign new task</h3>
         <form id="assignForm">
           <label class="field">
-            <span>Task label</span>
-            <input type="text" id="taskLabel" name="taskLabel" required maxlength="60" placeholder="e.g., Compile daily metrics" />
+            <span>Task Title</span>
+            <input type="text" id="taskTitle" name="taskTitle" required maxlength="60" placeholder="e.g., Compile daily metrics" />
           </label>
           <label class="field">
-            <span>Notes (optional)</span>
-            <textarea id="taskNotes" name="taskNotes" rows="2" maxlength="200" placeholder="Add any context..."></textarea>
+            <span>Instructions</span>
+            <textarea id="taskInstructions" name="taskInstructions" rows="2" maxlength="500" placeholder="Describe what the agent should do..."></textarea>
           </label>
           <fieldset class="field mcp-fieldset">
             <legend>MCP Adapters</legend>
@@ -59,16 +110,13 @@
         </div>
         <ul id="taskList" class="task-list" aria-live="polite"></ul>
       </section>
-      <section class="panel-block history-block">
-        <div class="section-head">
-          <h3>History</h3>
-        </div>
-        <ul id="historyList" class="task-list history"></ul>
-      </section>
       <section class="panel-block mcp-panel-block">
         <div class="section-head">
           <h3>MCP Adapters</h3>
-          <span class="eyebrow" id="mcpCount">0 available</span>
+          <div class="section-head-right">
+            <span class="eyebrow" id="mcpCount">0 available</span>
+            <button type="button" id="mcpConfigBtn" class="clear-btn" title="Configure MCP Servers">⚙ Configure</button>
+          </div>
         </div>
         <div id="mcpAdapterList" class="mcp-adapter-list"></div>
       </section>
@@ -80,6 +128,41 @@
       </section>
     </aside>
     <div class="toast-stack" aria-live="assertive" aria-atomic="false"></div>
+
+    <!-- MCP Configuration Modal -->
+    <dialog id="mcpConfigModal" class="mcp-modal">
+      <div class="mcp-modal-content">
+        <div class="section-head">
+          <h3>Configure MCP Servers</h3>
+          <button type="button" id="mcpModalClose" class="clear-btn" title="Close">&times;</button>
+        </div>
+        <div id="mcpConfigList" class="mcp-config-list"></div>
+        <form id="mcpAddForm" class="mcp-add-form">
+          <h4>Add New MCP Server</h4>
+          <label class="field">
+            <span>Name</span>
+            <input type="text" id="mcpNewName" required maxlength="30" placeholder="e.g., My API" />
+          </label>
+          <label class="field">
+            <span>Icon (emoji)</span>
+            <input type="text" id="mcpNewIcon" maxlength="4" placeholder="🔌" />
+          </label>
+          <label class="field">
+            <span>Description</span>
+            <input type="text" id="mcpNewDesc" maxlength="80" placeholder="What this server does" />
+          </label>
+          <label class="field">
+            <span>Tools (comma-separated)</span>
+            <input type="text" id="mcpNewTools" placeholder="tool_a, tool_b, tool_c" />
+          </label>
+          <label class="field">
+            <span>Config Fields (one per line: key:Label)</span>
+            <textarea id="mcpNewConfigFields" rows="3" maxlength="500" placeholder="apiKey:API Key&#10;baseUrl:Base URL&#10;secret:Secret Token"></textarea>
+          </label>
+          <button type="submit" class="primary-btn">Add Server</button>
+        </form>
+      </div>
+    </dialog>
   </main>
   <script type="module" src="app.js"></script>
 </body>
