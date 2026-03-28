@@ -1,6 +1,10 @@
 # Agent Bar Hangout
 
-A cyberpunk-themed 3D bar where AI "worker agents" hang out waiting for task assignments. Assign tasks to four distinct agents — **Nova**, **Quinn**, **Rune**, and **Sol** — and watch them work through configurable MCP (Model Context Protocol) adapters, all rendered in a neon-lit Three.js bar scene.
+> **⚠️ IMPORTANT DISCLAIMER**
+>
+> This project was almost entirely built by AI agents. Use at your own risk. The code, assets, and documentation may contain errors, unexpected behavior, or security considerations that have not been fully vetted by a human. No warranties or guarantees are provided.
+
+A typical-themed 3D bar where AI "worker agents" hang out waiting for task assignments. Assign tasks to four distinct agents — **Nova**, **Quinn**, **Rune**, and **Sol** — and watch them work through configurable MCP (Model Context Protocol) adapters, all rendered in a neon-lit Three.js bar scene.
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 
