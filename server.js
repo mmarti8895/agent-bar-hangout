@@ -2,6 +2,8 @@
  * Lightweight dev server for Agent Bar Hangout.
  * - Serves static files from the project root
  * - Proxies /api/chat to the OpenAI Chat Completions API
+ * - Proxies /api/slack, /api/stripe, /api/email, /api/calendar,
+ *   /api/monitoring, /api/analytics, /api/openclaw for live adapters
  * 
  * Usage:  node server.js
  * Then open http://localhost:8080
@@ -115,8 +117,9 @@ async function handleChatProxy(req, res) {
 
   try {
     // Build messages: system → prior context entries → current prompt
+    const today = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
     const messages = [
-      { role: 'system', content: 'You are a helpful assistant. Provide concise, factual answers. For weather, include current conditions, temperature, humidity, wind, and forecast when possible. For searches, provide relevant factual information with sources when applicable. If the user refers to something from a previous answer, use the conversation history to respond accurately.' },
+      { role: 'system', content: 'You are a helpful assistant. Today is ' + today + '. Provide concise, factual answers. For weather, include current conditions, temperature, humidity, wind, and forecast when possible. For searches, provide relevant factual information with sources when applicable. If the user refers to something from a previous answer, use the conversation history to respond accurately.' },
     ];
 
     // Inject rolling context for this agent
@@ -219,6 +222,122 @@ async function serveStatic(req, res) {
   }
 }
 
+/* ───── Generic API proxy for live MCP adapters ───── */
+async function readBody(req) {
+  let body = '';
+  for await (const chunk of req) body += chunk;
+  try { return JSON.parse(body); } catch { return {}; }
+}
+
+function jsonResponse(res, status, data) {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(data));
+}
+
+/* Slack API proxy */
+async function handleSlackProxy(req, res) {
+  const { botToken, action, channel, text, query } = await readBody(req);
+  if (!botToken) return jsonResponse(res, 400, { error: 'Missing botToken' });
+  const headers = { 'Authorization': 'Bearer ' + botToken, 'Content-Type': 'application/json' };
+  try {
+    let url, fetchBody;
+    switch (action) {
+      case 'list_channels':
+        url = 'https://slack.com/api/conversations.list?types=public_channel,private_channel&limit=100';
+        break;
+      case 'send_message':
+        url = 'https://slack.com/api/chat.postMessage';
+        fetchBody = JSON.stringify({ channel: channel || '#general', text: text || '' });
+        break;
+      case 'read_channel':
+        url = 'https://slack.com/api/conversations.history?channel=' + encodeURIComponent(channel || '') + '&limit=20';
+        break;
+      case 'search_messages':
+        url = 'https://slack.com/api/search.messages?query=' + encodeURIComponent(query || '') + '&count=10';
+        break;
+      default:
+        url = 'https://slack.com/api/conversations.list?limit=10';
+    }
+    const resp = await fetch(url, { method: fetchBody ? 'POST' : 'GET', headers, body: fetchBody });
+    const data = await resp.json();
+    jsonResponse(res, 200, data);
+  } catch (e) {
+    jsonResponse(res, 502, { error: 'Slack API error: ' + e.message });
+  }
+}
+
+/* Stripe API proxy */
+async function handleStripeProxy(req, res) {
+  const { secretKey, action, limit } = await readBody(req);
+  if (!secretKey) return jsonResponse(res, 400, { error: 'Missing secretKey' });
+  const headers = { 'Authorization': 'Bearer ' + secretKey };
+  try {
+    let url;
+    switch (action) {
+      case 'list_payments': url = 'https://api.stripe.com/v1/charges?limit=' + (limit || 10); break;
+      case 'list_subscriptions': url = 'https://api.stripe.com/v1/subscriptions?limit=' + (limit || 10); break;
+      case 'get_balance': url = 'https://api.stripe.com/v1/balance'; break;
+      case 'list_customers': url = 'https://api.stripe.com/v1/customers?limit=' + (limit || 10); break;
+      default: url = 'https://api.stripe.com/v1/charges?limit=5';
+    }
+    const resp = await fetch(url, { headers });
+    const data = await resp.json();
+    jsonResponse(res, 200, data);
+  } catch (e) {
+    jsonResponse(res, 502, { error: 'Stripe API error: ' + e.message });
+  }
+}
+
+/* Email (SendGrid) API proxy */
+async function handleEmailProxy(req, res) {
+  const { apiKey, action, to, from, subject, html, text } = await readBody(req);
+  if (!apiKey) return jsonResponse(res, 400, { error: 'Missing apiKey' });
+  const headers = { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' };
+  try {
+    if (action === 'send_email') {
+      const resp = await fetch('https://api.sendgrid.com/v3/mail/send', {
+        method: 'POST', headers,
+        body: JSON.stringify({
+          personalizations: [{ to: [{ email: to }] }],
+          from: { email: from || 'noreply@app.com' },
+          subject: subject || 'No Subject',
+          content: [{ type: 'text/plain', value: text || html || '' }],
+        }),
+      });
+      jsonResponse(res, resp.status, { ok: resp.ok, status: resp.status });
+    } else if (action === 'get_stats') {
+      const resp = await fetch('https://api.sendgrid.com/v3/stats?start_date=2026-03-01', { headers });
+      const data = await resp.json();
+      jsonResponse(res, 200, data);
+    } else {
+      jsonResponse(res, 400, { error: 'Unknown email action: ' + action });
+    }
+  } catch (e) {
+    jsonResponse(res, 502, { error: 'Email API error: ' + e.message });
+  }
+}
+
+/* OpenClaw Gateway proxy — sends message via HTTP (Gateway REST fallback) */
+async function handleOpenClawProxy(req, res) {
+  const { gatewayUrl, authToken, sessionId, message } = await readBody(req);
+  if (!gatewayUrl) return jsonResponse(res, 400, { error: 'Missing gatewayUrl' });
+  try {
+    // Convert ws:// to http:// for REST endpoint
+    const httpUrl = gatewayUrl.replace(/^ws:/, 'http:').replace(/^wss:/, 'https:');
+    const url = httpUrl.replace(/\/+$/, '') + '/api/message';
+    const headers = { 'Content-Type': 'application/json' };
+    if (authToken) headers['Authorization'] = 'Bearer ' + authToken;
+    const resp = await fetch(url, {
+      method: 'POST', headers,
+      body: JSON.stringify({ session: sessionId || 'main', message: message || '' }),
+    });
+    const data = await resp.json();
+    jsonResponse(res, 200, data);
+  } catch (e) {
+    jsonResponse(res, 502, { error: 'OpenClaw Gateway error: ' + e.message });
+  }
+}
+
 /* ───── Router ───── */
 const server = createServer((req, res) => {
   // CORS headers for local dev
@@ -239,6 +358,26 @@ const server = createServer((req, res) => {
 
   if (req.method === 'POST' && req.url === '/api/context/clear') {
     handleContextClear(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/slack') {
+    handleSlackProxy(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/stripe') {
+    handleStripeProxy(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/email') {
+    handleEmailProxy(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/openclaw') {
+    handleOpenClawProxy(req, res);
     return;
   }
 
