@@ -4,6 +4,10 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
+/* ───────── Tauri IPC bridge ───────── */
+const IS_TAURI = !!(window.__TAURI__ && window.__TAURI__.core);
+const tauriInvoke = IS_TAURI ? window.__TAURI__.core.invoke : null;
+
 /* ───────── DOM refs ───────── */
 const canvas = document.getElementById('barCanvas');
 const dom = {
@@ -80,11 +84,15 @@ const state = {
 
 /* ───────── Agent context helpers (server-side engine) ───────── */
 function clearServerContext(agentId) {
-  fetch('/api/context/clear', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ agentId }),
-  }).catch(() => {}); // fire-and-forget
+  if (IS_TAURI) {
+    tauriInvoke('context_clear', { agentId }).catch(() => {});
+  } else {
+    fetch('/api/context/clear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId }),
+    }).catch(() => {}); // fire-and-forget
+  }
 }
 
 /* ───────── MCP Adapter Registry ───────── */
@@ -113,11 +121,27 @@ const defaultMcpAdapters = [
     configValues: {},
   },
   {
-    id: 'web', name: 'AI Query', icon: '🤖',
-    description: 'LLM-powered queries via ChatGPT',
+    id: 'web', name: 'AI Search', icon: '🤖',
+    description: 'LLM-powered queries via multiple AI vendors',
     tools: ['ask_llm', 'search_web', 'summarize', 'analyze'],
     isDefault: true,
-    configFields: [],
+    configFields: [
+      { key: 'llmVendor', label: 'LLM Vendor', type: 'select', required: true,
+        options: [
+          { value: '', label: '— Select a vendor —' },
+          { value: 'openai', label: 'ChatGPT (OpenAI)' },
+          { value: 'anthropic', label: 'Claude (Anthropic)' },
+          { value: 'google', label: 'Gemini (Google)' },
+          { value: 'xai', label: 'Grok (xAI)' },
+          { value: 'deepseek', label: 'DeepSeek' },
+          { value: 'ollama', label: 'Ollama (Local)' },
+          { value: 'mistral', label: 'Mistral AI' },
+          { value: 'cohere', label: 'Cohere' },
+          { value: 'perplexity', label: 'Perplexity' },
+        ],
+      },
+    ],
+    // Dynamic fields rendered per vendor — see LLM_VENDOR_FIELDS below
     configValues: {},
   },
   {
@@ -181,36 +205,313 @@ const defaultMcpAdapters = [
     ],
     configValues: {},
   },
+  {
+    id: 'aws', name: 'AWS Cloud', icon: '☁️',
+    description: 'EC2, S3, Lambda, CloudWatch',
+    tools: ['list_instances', 'list_buckets', 'invoke_lambda', 'get_logs', 'describe_stack', 'get_metrics'],
+    isDefault: true,
+    configFields: [
+      { key: 'accessKeyId', label: 'Access Key ID', type: 'password', required: true, placeholder: 'AKIA…' },
+      { key: 'secretAccessKey', label: 'Secret Access Key', type: 'password', required: true, placeholder: '••••••' },
+      { key: 'region', label: 'Region', type: 'text', required: true, placeholder: 'us-east-1' },
+    ],
+    configValues: {},
+  },
+  {
+    id: 'email', name: 'Email', icon: '📧',
+    description: 'Send & manage emails via SendGrid / Mailgun',
+    tools: ['send_email', 'list_templates', 'check_delivery', 'get_stats', 'search_inbox'],
+    isDefault: true,
+    configFields: [
+      { key: 'apiKey', label: 'API Key', type: 'password', required: true, placeholder: 'SG.…' },
+      { key: 'provider', label: 'Provider', type: 'text', required: false, placeholder: 'sendgrid, mailgun' },
+      { key: 'fromAddress', label: 'From Address', type: 'email', required: true, placeholder: 'noreply@yourapp.com' },
+    ],
+    configValues: {},
+  },
+  {
+    id: 'calendar', name: 'Calendar', icon: '📅',
+    description: 'Google / Outlook calendar events & scheduling',
+    tools: ['list_events', 'create_event', 'check_availability', 'update_event', 'delete_event'],
+    isDefault: true,
+    configFields: [
+      { key: 'provider', label: 'Provider', type: 'text', required: true, placeholder: 'google, outlook' },
+      { key: 'calendarId', label: 'Calendar ID', type: 'text', required: false, placeholder: 'primary' },
+      { key: 'oauthToken', label: 'OAuth Token', type: 'password', required: true, placeholder: 'ya29.…' },
+    ],
+    configValues: {},
+  },
+  {
+    id: 'monitoring', name: 'Monitoring', icon: '📊',
+    description: 'Datadog, PagerDuty alerts & incidents',
+    tools: ['list_alerts', 'get_incident', 'acknowledge_alert', 'get_metrics', 'create_incident', 'resolve_incident'],
+    isDefault: true,
+    configFields: [
+      { key: 'provider', label: 'Provider', type: 'text', required: true, placeholder: 'datadog, pagerduty' },
+      { key: 'apiKey', label: 'API Key', type: 'password', required: true, placeholder: 'API key' },
+      { key: 'appKey', label: 'App Key (Datadog)', type: 'password', required: false, placeholder: 'Optional' },
+    ],
+    configValues: {},
+  },
+  {
+    id: 'docker', name: 'Docker / K8s', icon: '🐳',
+    description: 'Container & cluster management',
+    tools: ['list_containers', 'list_pods', 'get_logs', 'restart_container', 'scale_deployment', 'describe_pod'],
+    isDefault: true,
+    configFields: [
+      { key: 'endpoint', label: 'Docker / K8s Endpoint', type: 'url', required: true, placeholder: 'http://localhost:2375 or https://k8s-api:6443' },
+      { key: 'namespace', label: 'Namespace', type: 'text', required: false, placeholder: 'default' },
+      { key: 'kubeconfig', label: 'Kubeconfig Path', type: 'text', required: false, placeholder: '~/.kube/config' },
+    ],
+    configValues: {},
+  },
+  {
+    id: 'notion', name: 'Notion / Linear', icon: '📝',
+    description: 'Pages, databases, project boards & sprints',
+    tools: ['search_pages', 'create_page', 'query_database', 'list_issues', 'update_issue', 'get_sprint'],
+    isDefault: true,
+    configFields: [
+      { key: 'provider', label: 'Provider', type: 'text', required: true, placeholder: 'notion, linear' },
+      { key: 'apiKey', label: 'API Key / Token', type: 'password', required: true, placeholder: 'secret_… or lin_api_…' },
+      { key: 'workspaceId', label: 'Workspace ID', type: 'text', required: false, placeholder: 'Optional' },
+    ],
+    configValues: {},
+  },
+  {
+    id: 'search', name: 'Web Search', icon: '🔍',
+    description: 'Brave, Tavily, or SerpAPI web search',
+    tools: ['search_web', 'get_snippets', 'search_news', 'search_images'],
+    isDefault: true,
+    configFields: [
+      { key: 'provider', label: 'Provider', type: 'text', required: true, placeholder: 'brave, tavily, serpapi' },
+      { key: 'apiKey', label: 'API Key', type: 'password', required: true, placeholder: 'API key' },
+    ],
+    configValues: {},
+  },
+  {
+    id: 'stripe', name: 'Stripe', icon: '💳',
+    description: 'Payments, subscriptions, invoices',
+    tools: ['list_payments', 'get_customer', 'list_subscriptions', 'create_invoice', 'get_balance', 'search_charges'],
+    isDefault: true,
+    configFields: [
+      { key: 'secretKey', label: 'Secret Key', type: 'password', required: true, placeholder: 'sk_live_…' },
+      { key: 'webhookSecret', label: 'Webhook Secret', type: 'password', required: false, placeholder: 'whsec_…' },
+    ],
+    configValues: {},
+  },
+  {
+    id: 'analytics', name: 'Analytics', icon: '📈',
+    description: 'Mixpanel, Amplitude, or PostHog metrics',
+    tools: ['get_events', 'get_funnel', 'get_retention', 'get_users', 'query_insights'],
+    isDefault: true,
+    configFields: [
+      { key: 'provider', label: 'Provider', type: 'text', required: true, placeholder: 'mixpanel, amplitude, posthog' },
+      { key: 'apiKey', label: 'API Key / Project Token', type: 'password', required: true, placeholder: 'API key' },
+      { key: 'projectId', label: 'Project ID', type: 'text', required: false, placeholder: 'Optional' },
+    ],
+    configValues: {},
+  },
+  {
+    id: 'openclaw', name: 'OpenClaw', icon: '🦞',
+    description: 'Route tasks to OpenClaw Gateway for real tool execution',
+    tools: ['agent_send', 'sessions_list', 'sessions_history', 'skills_search', 'browser_control', 'bash_exec'],
+    isDefault: true,
+    configFields: [
+      { key: 'gatewayUrl', label: 'Gateway WS URL', type: 'url', required: true, placeholder: 'ws://127.0.0.1:18789' },
+      { key: 'authToken', label: 'Auth Token', type: 'password', required: false, placeholder: 'Optional — for password-protected gateways' },
+      { key: 'sessionId', label: 'Session ID', type: 'text', required: false, placeholder: 'main (default)' },
+    ],
+    configValues: {},
+  },
 ];
 
 const MCP_STORAGE_KEY = 'agentBarHangout_mcpAdapters';
+const MCP_CRYPTO_KEY_STORE = 'agentBarHangout_ck';
 
-function loadMcpAdapters() {
+/* ───────── Credential encryption (AES-256-GCM via Web Crypto) ───────── */
+/* In Tauri mode, credentials are stored in OS keyring via vault commands.
+   In browser mode, fall back to Web Crypto AES-256-GCM + localStorage. */
+async function getCryptoKey() {
+  const stored = localStorage.getItem(MCP_CRYPTO_KEY_STORE);
+  if (stored) {
+    const jwk = JSON.parse(stored);
+    return crypto.subtle.importKey('jwk', jwk, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
+  }
+  const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+  const jwk = await crypto.subtle.exportKey('jwk', key);
+  localStorage.setItem(MCP_CRYPTO_KEY_STORE, JSON.stringify(jwk));
+  return key;
+}
+
+async function encryptData(data) {
+  const key = await getCryptoKey();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encoded = new TextEncoder().encode(JSON.stringify(data));
+  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
+  return JSON.stringify({ v: 1, iv: Array.from(iv), d: Array.from(new Uint8Array(encrypted)) });
+}
+
+async function decryptData(raw) {
+  const obj = JSON.parse(raw);
+  if (!obj.v) return obj; // legacy plaintext JSON (array) — return as-is
+  const key = await getCryptoKey();
+  const decrypted = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: new Uint8Array(obj.iv) },
+    key,
+    new Uint8Array(obj.d),
+  );
+  return JSON.parse(new TextDecoder().decode(decrypted));
+}
+
+/* ───────── Tauri vault helpers ───────── */
+async function vaultStoreAdapterCreds(adapterId, configValues) {
+  if (!IS_TAURI) return;
+  await tauriInvoke('vault_store', { key: 'adapter_' + adapterId, value: JSON.stringify(configValues) });
+}
+
+async function vaultGetAdapterCreds(adapterId) {
+  if (!IS_TAURI) return null;
+  try {
+    const raw = await tauriInvoke('vault_get', { key: 'adapter_' + adapterId });
+    return JSON.parse(raw);
+  } catch { return null; }
+}
+
+async function vaultDeleteAdapterCreds(adapterId) {
+  if (!IS_TAURI) return;
+  await tauriInvoke('vault_delete', { key: 'adapter_' + adapterId }).catch(() => {});
+}
+
+async function loadMcpAdapters() {
+  if (IS_TAURI) {
+    // In Tauri: adapter metadata in localStorage, credentials in OS vault
+    try {
+      const saved = localStorage.getItem(MCP_STORAGE_KEY);
+      let parsed = null;
+      if (saved) {
+        try { parsed = JSON.parse(saved); } catch { parsed = null; }
+        if (!Array.isArray(parsed)) parsed = null;
+      }
+      const merged = defaultMcpAdapters.map((def) => {
+        const s = parsed ? parsed.find(p => p.id === def.id) : null;
+        return { ...def, configValues: s ? { ...(def.configValues || {}), ...(s.configValues || {}) } : { ...(def.configValues || {}) } };
+      });
+      if (parsed) {
+        const defaultIds = new Set(defaultMcpAdapters.map(d => d.id));
+        parsed.forEach(s => {
+          if (!defaultIds.has(s.id)) merged.push({ ...s, configFields: s.configFields || [], configValues: s.configValues || {} });
+        });
+      }
+      // Restore credentials from vault for each adapter
+      for (const adapter of merged) {
+        const vaultCreds = await vaultGetAdapterCreds(adapter.id);
+        if (vaultCreds) {
+          adapter.configValues = { ...(adapter.configValues || {}), ...vaultCreds };
+        }
+      }
+      return merged;
+    } catch { /* fall through */ }
+    return defaultMcpAdapters.map(a => ({ ...a, configValues: { ...(a.configValues || {}) } }));
+  }
+  // Browser mode: encrypted localStorage
   try {
     const saved = localStorage.getItem(MCP_STORAGE_KEY);
     if (saved) {
-      const parsed = JSON.parse(saved);
+      const parsed = await decryptData(saved);
       if (Array.isArray(parsed) && parsed.length) {
-        // Merge saved config with defaults to pick up any new configFields
-        return parsed.map((saved) => {
-          const def = defaultMcpAdapters.find((d) => d.id === saved.id);
+        const savedById = new Map(parsed.map((s) => [s.id, s]));
+
+        // Start with all defaults, merging saved configValues on top
+        const merged = defaultMcpAdapters.map((def) => {
+          const s = savedById.get(def.id);
           return {
-            ...saved,
-            configFields: saved.configFields || (def ? def.configFields : []) || [],
-            configValues: saved.configValues || {},
+            ...def,
+            configValues: s ? { ...(def.configValues || {}), ...(s.configValues || {}) } : { ...(def.configValues || {}) },
           };
         });
+
+        // Append any custom (non-default) adapters the user added
+        const defaultIds = new Set(defaultMcpAdapters.map((d) => d.id));
+        parsed.forEach((s) => {
+          if (!defaultIds.has(s.id)) {
+            merged.push({ ...s, configFields: s.configFields || [], configValues: s.configValues || {} });
+          }
+        });
+
+        return merged;
       }
     }
-  } catch (_) { /* ignore corrupt data */ }
+  } catch (_) { /* ignore corrupt / decryption failure — start fresh */ }
   return defaultMcpAdapters.map((a) => ({ ...a, configValues: { ...(a.configValues || {}) } }));
 }
 
-function saveMcpAdapters() {
-  localStorage.setItem(MCP_STORAGE_KEY, JSON.stringify(mcpAdapters));
+async function saveMcpAdapters() {
+  if (IS_TAURI) {
+    // In Tauri: store credentials in OS vault, metadata (without secrets) in localStorage
+    const metaOnly = mcpAdapters.map(a => {
+      const safeVals = {};
+      const secretKeys = new Set((a.configFields || []).filter(f => f.type === 'password').map(f => f.key));
+      for (const [k, v] of Object.entries(a.configValues || {})) {
+        if (!secretKeys.has(k)) safeVals[k] = v;
+      }
+      return { ...a, configValues: safeVals };
+    });
+    localStorage.setItem(MCP_STORAGE_KEY, JSON.stringify(metaOnly));
+    // Store full credentials (including secrets) in vault
+    for (const a of mcpAdapters) {
+      if (a.configValues && Object.keys(a.configValues).length > 0) {
+        await vaultStoreAdapterCreds(a.id, a.configValues);
+      }
+    }
+    return;
+  }
+  // Browser mode: encrypted localStorage
+  const encrypted = await encryptData(mcpAdapters);
+  localStorage.setItem(MCP_STORAGE_KEY, encrypted);
 }
 
-const mcpAdapters = loadMcpAdapters();
+let mcpAdapters = defaultMcpAdapters.map((a) => ({ ...a, configValues: { ...(a.configValues || {}) } }));
+
+/* ───────── LLM vendor credential definitions ───────── */
+const LLM_VENDOR_FIELDS = {
+  openai: [
+    { key: 'apiKey', label: 'API Key', type: 'password', required: true, placeholder: 'sk-...' },
+    { key: 'orgId', label: 'Organization ID', type: 'text', required: false, placeholder: 'org-... (optional)' },
+    { key: 'model', label: 'Model', type: 'text', required: false, placeholder: 'gpt-4o-mini' },
+  ],
+  anthropic: [
+    { key: 'apiKey', label: 'API Key', type: 'password', required: true, placeholder: 'sk-ant-...' },
+    { key: 'model', label: 'Model', type: 'text', required: false, placeholder: 'claude-sonnet-4-20250514' },
+  ],
+  google: [
+    { key: 'apiKey', label: 'API Key', type: 'password', required: true, placeholder: 'AIza...' },
+    { key: 'model', label: 'Model', type: 'text', required: false, placeholder: 'gemini-2.0-flash' },
+  ],
+  xai: [
+    { key: 'apiKey', label: 'API Key', type: 'password', required: true, placeholder: 'xai-...' },
+    { key: 'model', label: 'Model', type: 'text', required: false, placeholder: 'grok-3' },
+  ],
+  deepseek: [
+    { key: 'apiKey', label: 'API Key', type: 'password', required: true, placeholder: 'sk-...' },
+    { key: 'model', label: 'Model', type: 'text', required: false, placeholder: 'deepseek-chat' },
+  ],
+  ollama: [
+    { key: 'endpoint', label: 'Endpoint URL', type: 'text', required: true, placeholder: 'http://localhost:11434' },
+    { key: 'model', label: 'Model', type: 'text', required: true, placeholder: 'llama3, mistral, codellama...' },
+  ],
+  mistral: [
+    { key: 'apiKey', label: 'API Key', type: 'password', required: true, placeholder: 'your-api-key' },
+    { key: 'model', label: 'Model', type: 'text', required: false, placeholder: 'mistral-large-latest' },
+  ],
+  cohere: [
+    { key: 'apiKey', label: 'API Key', type: 'password', required: true, placeholder: 'your-api-key' },
+    { key: 'model', label: 'Model', type: 'text', required: false, placeholder: 'command-r-plus' },
+  ],
+  perplexity: [
+    { key: 'apiKey', label: 'API Key', type: 'password', required: true, placeholder: 'pplx-...' },
+    { key: 'model', label: 'Model', type: 'text', required: false, placeholder: 'sonar-pro' },
+  ],
+};
 
 /* ───────── Three.js setup ───────── */
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -927,7 +1228,7 @@ function handleAssignSubmit(event) {
   const etaMinutes = etaRaw ? Math.max(1, Math.min(240, Number(etaRaw))) : null;
   addTaskToAgent(agent.id, { title, instructions, etaMinutes, mcpIds });
   dom.assignForm.reset();
-  // Reset checkboxes with AI Query checked by default
+  // Reset checkboxes with AI Search checked by default
   renderMcpCheckboxes();
   dom.taskTitle.focus();
 }
@@ -1252,9 +1553,9 @@ function generateMcpSimulatedOutput(adapter, taskLabel) {
       break;
     }
     case 'web': {
-      lines.push('🌐 Web.fetch_url() → fetching content...');
-      lines.push('  200 OK — received 24.3 KB, extracted 1,247 words');
-      lines.push('🌐 Web.extract_text() → OK');
+      lines.push('🤖 AI.search() → querying LLM...');
+      lines.push('  200 OK — received response, extracted 1,247 words');
+      lines.push('🤖 AI.summarize() → OK');
       break;
     }
     case 'atlassian': {
@@ -1271,6 +1572,75 @@ function generateMcpSimulatedOutput(adapter, taskLabel) {
       const contacts = 10 + Math.floor(Math.random() * 100);
       lines.push('  Found ' + contacts + ' contacts matching criteria');
       lines.push('🟠 HubSpot.list_tickets() → 4 open tickets');
+      break;
+    }
+    case 'aws': {
+      const region = cv.region || 'us-east-1';
+      lines.push('☁️ AWS.list_instances() → region=' + region);
+      lines.push('  Found ' + (2 + Math.floor(Math.random() * 8)) + ' EC2 instances (' + (1 + Math.floor(Math.random() * 4)) + ' running)');
+      lines.push('☁️ AWS.get_metrics() → CloudWatch OK');
+      break;
+    }
+    case 'email': {
+      const from = cv.fromAddress || 'noreply@app.com';
+      lines.push('📧 Email.send_email() → from=' + from);
+      lines.push('  Queued ' + (1 + Math.floor(Math.random() * 5)) + ' email(s) for delivery');
+      lines.push('📧 Email.check_delivery() → all delivered ✓');
+      break;
+    }
+    case 'calendar': {
+      const provider = cv.provider || 'google';
+      lines.push('📅 Calendar.list_events() → ' + provider);
+      lines.push('  Found ' + (3 + Math.floor(Math.random() * 8)) + ' events today');
+      lines.push('📅 Calendar.check_availability() → 2 free slots found');
+      break;
+    }
+    case 'monitoring': {
+      const provider = cv.provider || 'datadog';
+      lines.push('📊 Monitoring.list_alerts() → ' + provider);
+      lines.push('  ' + Math.floor(Math.random() * 4) + ' critical, ' + (1 + Math.floor(Math.random() * 6)) + ' warning alerts');
+      lines.push('📊 Monitoring.get_metrics() → OK');
+      break;
+    }
+    case 'docker': {
+      const ns = cv.namespace || 'default';
+      lines.push('🐳 Docker.list_containers() → namespace=' + ns);
+      lines.push('  ' + (3 + Math.floor(Math.random() * 10)) + ' containers running, ' + Math.floor(Math.random() * 3) + ' stopped');
+      lines.push('🐳 Docker.list_pods() → ' + (4 + Math.floor(Math.random() * 8)) + ' pods healthy');
+      break;
+    }
+    case 'notion': {
+      const provider = cv.provider || 'notion';
+      lines.push('📝 ' + provider + '.search_pages() → searching workspace...');
+      lines.push('  Found ' + (5 + Math.floor(Math.random() * 20)) + ' matching pages');
+      lines.push('📝 ' + provider + '.query_database() → OK');
+      break;
+    }
+    case 'search': {
+      const provider = cv.provider || 'brave';
+      lines.push('🔍 Search.search_web() → provider=' + provider);
+      lines.push('  Returned ' + (5 + Math.floor(Math.random() * 10)) + ' results in 0.' + (10 + Math.floor(Math.random() * 90)) + 's');
+      lines.push('🔍 Search.get_snippets() → extracted ' + (3 + Math.floor(Math.random() * 5)) + ' snippets');
+      break;
+    }
+    case 'stripe': {
+      lines.push('💳 Stripe.list_payments() → fetching recent charges...');
+      lines.push('  ' + (5 + Math.floor(Math.random() * 20)) + ' payments ($' + ((1 + Math.random() * 50) * 1000).toFixed(0) + ' total)');
+      lines.push('💳 Stripe.get_balance() → OK');
+      break;
+    }
+    case 'analytics': {
+      const provider = cv.provider || 'mixpanel';
+      lines.push('📈 Analytics.get_events() → ' + provider);
+      lines.push('  ' + (1000 + Math.floor(Math.random() * 50000)) + ' events in last 24h');
+      lines.push('📈 Analytics.get_funnel() → conversion rate ' + (15 + Math.floor(Math.random() * 60)) + '%');
+      break;
+    }
+    case 'openclaw': {
+      const gw = cv.gatewayUrl || 'ws://127.0.0.1:18789';
+      lines.push('🦞 OpenClaw.agent_send() → gateway=' + gw);
+      lines.push('  Session connected, routing task to agent runtime...');
+      lines.push('🦞 OpenClaw.sessions_list() → 1 active session');
       break;
     }
     default: {
@@ -1307,11 +1677,44 @@ async function generateTaskResult(taskLabel, mcpIds, agentId) {
   return sections.join('\n\n');
 }
 
-/* ───────── ChatGPT API helper ───────── */
-async function askChatGPT(query, agentId) {
+/* ───────── LLM API helper ───────── */
+function getWebAdapterConfig() {
+  const adapter = mcpAdapters.find(a => a.id === 'web');
+  return (adapter && adapter.configValues) || {};
+}
+
+async function askLLM(query, agentId) {
   try {
+    const cv = getWebAdapterConfig();
+    if (IS_TAURI) {
+      const vendorConfig = {};
+      if (cv.llmVendor) {
+        const fields = LLM_VENDOR_FIELDS[cv.llmVendor] || [];
+        for (const f of fields) {
+          if (cv[f.key]) vendorConfig[f.key] = cv[f.key];
+        }
+      }
+      const result = await tauriInvoke('chat_proxy', {
+        request: {
+          prompt: query,
+          agent_id: agentId || null,
+          vendor: cv.llmVendor || null,
+          vendor_config: Object.keys(vendorConfig).length ? vendorConfig : null,
+        },
+      });
+      return '📋 RESULT — ' + result.answer;
+    }
     const payload = { prompt: query };
     if (agentId) payload.agentId = agentId;
+    // Pass vendor config so server can route to the right LLM
+    if (cv.llmVendor) {
+      payload.vendor = cv.llmVendor;
+      payload.vendorConfig = {};
+      const fields = LLM_VENDOR_FIELDS[cv.llmVendor] || [];
+      for (const f of fields) {
+        if (cv[f.key]) payload.vendorConfig[f.key] = cv[f.key];
+      }
+    }
     const resp = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1324,7 +1727,7 @@ async function askChatGPT(query, agentId) {
     const data = await resp.json();
     return '📋 RESULT — ' + data.answer;
   } catch (e) {
-    return '❌ ChatGPT error: ' + e.message;
+    return '❌ LLM error: ' + (e.message || e);
   }
 }
 
@@ -1387,7 +1790,7 @@ async function fetchGitHubReal(cv, label) {
       '  Repos: ' + repos.map(r => r.full_name).join(', ') + '\n' +
       '  Total public repos: ' + (repos.length >= 10 ? '10+' : repos.length);
   } catch (e) {
-    return '❌ GitHub API error: ' + e.message + '\n  Check your token and owner in MCP configuration.';
+    return '❌ GitHub API error: ' + (e.message || e) + '\n  Check your token and owner in MCP configuration.';
   }
 }
 
@@ -1455,7 +1858,7 @@ async function fetchWeatherReal(taskLabel) {
       '  UV Index: ' + uvIndex +
       tomorrowStr;
   } catch (e) {
-    return '❌ Weather fetch error: ' + e.message + '\n  Could not retrieve weather for "' + location + '".';
+    return '❌ Weather fetch error: ' + (e.message || e) + '\n  Could not retrieve weather for "' + location + '".';
   }
 }
 
@@ -1467,47 +1870,72 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
 
     case 'terminal': {
       const shell = cv.shell || 'powershell';
+      const isPosh = shell === 'powershell' || shell === 'pwsh';
+
+      // Map user intent to a real command
+      let cmd;
       if (label.includes('dir') || label.includes('ls') || label.includes('list') || label.includes('directory') || label.includes('folder') || label.includes('file')) {
-        const files = ['index.html', 'app.js', 'style.css', 'package.json', 'README.md', 'tsconfig.json', '.gitignore', 'vite.config.ts', 'LICENSE', 'Dockerfile'];
-        const dirs = ['src/', 'public/', 'node_modules/', 'dist/', 'tests/', '.git/', 'assets/', 'config/'];
-        const pickedFiles = files.sort(() => Math.random() - 0.5).slice(0, 3 + Math.floor(Math.random() * 5));
-        const pickedDirs = dirs.sort(() => Math.random() - 0.5).slice(0, 2 + Math.floor(Math.random() * 3));
-        return '📋 RESULT — Directory listing (' + shell + '):\n' +
-          pickedDirs.map(d => '  📁 ' + d).join('\n') + '\n' +
-          pickedFiles.map(f => '  📄 ' + f + '  ' + (Math.random() * 50).toFixed(1) + ' KB').join('\n') + '\n' +
-          '  Total: ' + pickedDirs.length + ' directories, ' + pickedFiles.length + ' files';
+        cmd = isPosh
+          ? 'Get-ChildItem | Format-Table Mode, LastWriteTime, Length, Name -AutoSize'
+          : 'ls -la';
+      } else if (label.includes('git') || label.includes('status') || label.includes('branch')) {
+        if (label.includes('log') || label.includes('commit') || label.includes('history')) {
+          cmd = 'git log --oneline -10';
+        } else if (label.includes('branch')) {
+          cmd = 'git branch -a';
+        } else {
+          cmd = 'git status';
+        }
+      } else if (label.includes('process') || label.includes('ps') || label.includes('running')) {
+        cmd = isPosh
+          ? 'Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 15 Id, ProcessName, @{N="Memory(MB)";E={[math]::Round($_.WorkingSet64/1MB,1)}} | Format-Table -AutoSize'
+          : 'ps aux --sort=-%mem | head -16';
+      } else if (label.includes('disk') || label.includes('space') || label.includes('storage') || label.includes('drive')) {
+        cmd = isPosh
+          ? 'Get-PSDrive -PSProvider FileSystem | Format-Table Name, @{N="Used(GB)";E={[math]::Round($_.Used/1GB,1)}}, @{N="Free(GB)";E={[math]::Round($_.Free/1GB,1)}} -AutoSize'
+          : 'df -h';
+      } else if (label.includes('env') || label.includes('environment') || label.includes('variable')) {
+        cmd = isPosh
+          ? 'Get-ChildItem Env: | Select-Object -First 20 | Format-Table Name, Value -AutoSize'
+          : 'env | head -20';
+      } else if (label.includes('network') || label.includes('ip') || label.includes('port') || label.includes('connection')) {
+        cmd = isPosh
+          ? 'Get-NetTCPConnection -State Established | Select-Object -First 15 LocalAddress, LocalPort, RemoteAddress, RemotePort | Format-Table -AutoSize'
+          : 'ss -tuln | head -16';
+      } else if (label.includes('uptime') || label.includes('system') || label.includes('info') || label.includes('hostname')) {
+        cmd = isPosh
+          ? '[PSCustomObject]@{Hostname=$env:COMPUTERNAME; OS=(Get-CimInstance Win32_OperatingSystem).Caption; Uptime=((Get-Date)-(Get-CimInstance Win32_OperatingSystem).LastBootUpTime).ToString("d\'d \'hh\:mm\:ss"); CPU=(Get-CimInstance Win32_Processor).Name; RAM=[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,1).ToString()+"GB"} | Format-List'
+          : 'uname -a && uptime';
+      } else {
+        // Generic: run systeminfo summary
+        cmd = isPosh
+          ? 'Write-Output "Hostname: $env:COMPUTERNAME"; Write-Output "User: $env:USERNAME"; Write-Output "OS: $((Get-CimInstance Win32_OperatingSystem).Caption)"; Write-Output "PowerShell: $($PSVersionTable.PSVersion)"; Write-Output "Working Dir: $(Get-Location)"'
+          : 'echo "Host: $(hostname)" && echo "User: $(whoami)" && echo "OS: $(uname -s -r)" && echo "Shell: $SHELL" && echo "PWD: $(pwd)"';
       }
-      if (label.includes('git') || label.includes('status') || label.includes('branch')) {
-        const branches = ['main', 'develop', 'feature/auth-v2', 'fix/memory-leak', 'chore/deps-update'];
-        const picked = branches.sort(() => Math.random() - 0.5).slice(0, 3 + Math.floor(Math.random() * 2));
-        const modified = ['src/app.js', 'package.json', 'README.md', 'src/utils.ts'];
-        const pickedMod = modified.sort(() => Math.random() - 0.5).slice(0, 1 + Math.floor(Math.random() * 3));
-        return '📋 RESULT — Git status:\n' +
-          '  Branch: ' + picked[0] + '\n' +
-          '  Modified files:\n' +
-          pickedMod.map(f => '    M  ' + f).join('\n') + '\n' +
-          '  Branches: ' + picked.join(', ') + '\n' +
-          '  Last commit: ' + ['fix: typo in docs', 'feat: add caching layer', 'chore: update deps', 'refactor: clean up utils'][Math.floor(Math.random() * 4)] + ' (' + (1 + Math.floor(Math.random() * 48)) + 'h ago)';
+
+      try {
+        let result;
+        if (IS_TAURI) {
+          result = await tauriInvoke('terminal_exec', {
+            request: { command: cmd, shell: shell },
+          });
+        } else {
+          const resp = await fetch('/api/terminal', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ command: cmd, shell }),
+          });
+          result = await resp.json();
+          if (result.error) throw new Error(result.error);
+        }
+        const output = (result.stdout || '').trim() || (result.stderr || '').trim() || 'No output';
+        return '📋 RESULT — Terminal (' + shell + ') [LIVE]:\n' +
+          '  $ ' + cmd + '\n' +
+          output.split('\n').map(l => '  ' + l).join('\n') +
+          '\n  Exit code: ' + (result.exit_code || 0);
+      } catch (e) {
+        return '❌ Terminal error: ' + (e.message || e);
       }
-      if (label.includes('process') || label.includes('ps') || label.includes('running')) {
-        const procs = [
-          { name: 'node.exe', pid: 4120 + Math.floor(Math.random() * 1000), mem: '45.2 MB' },
-          { name: 'code.exe', pid: 2000 + Math.floor(Math.random() * 1000), mem: '312.8 MB' },
-          { name: 'chrome.exe', pid: 5000 + Math.floor(Math.random() * 1000), mem: '521.4 MB' },
-          { name: 'powershell.exe', pid: 7000 + Math.floor(Math.random() * 1000), mem: '78.1 MB' },
-          { name: 'explorer.exe', pid: 1200 + Math.floor(Math.random() * 100), mem: '95.6 MB' },
-        ];
-        return '📋 RESULT — Running processes:\n' +
-          '  PID      NAME               MEMORY\n' +
-          procs.map(p => '  ' + String(p.pid).padEnd(9) + p.name.padEnd(19) + p.mem).join('\n') + '\n' +
-          '  Total: ' + (80 + Math.floor(Math.random() * 80)) + ' processes active';
-      }
-      // generic terminal
-      return '📋 RESULT — Command output (' + shell + '):\n' +
-        '  Exit code: 0\n' +
-        '  stdout: Command executed successfully.\n' +
-        '  ' + (1 + Math.floor(Math.random() * 20)) + ' line(s) of output captured.\n' +
-        '  Duration: ' + (0.1 + Math.random() * 3).toFixed(2) + 's';
     }
 
     case 'filesystem': {
@@ -1596,19 +2024,47 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
 
     case 'slack': {
       const ws = cv.workspaceUrl || 'team.slack.com';
-      if (label.includes('channel') || label.includes('list')) {
-        const channels = [
-          { name: '#general', members: 42, unread: 3 },
-          { name: '#development', members: 18, unread: 7 },
-          { name: '#design', members: 12, unread: 0 },
-          { name: '#random', members: 38, unread: 15 },
-          { name: '#alerts', members: 25, unread: 1 },
-          { name: '#marketing', members: 9, unread: 4 },
-        ];
-        return '📋 RESULT — Slack channels (' + ws + '):\n' +
-          channels.map(c => '  ' + c.name.padEnd(16) + c.members + ' members  ' + (c.unread ? c.unread + ' unread' : '✓ caught up')).join('\n');
+      // Try live Slack API if configured
+      if (cv.botToken) {
+        try {
+          let action = 'list_channels';
+          const reqBody = { botToken: cv.botToken, action };
+          if (label.includes('send') || label.includes('post') || label.includes('notify')) {
+            reqBody.action = 'send_message';
+            reqBody.text = taskLabel;
+          } else if (label.includes('message') || label.includes('read') || label.includes('search')) {
+            reqBody.action = label.includes('search') ? 'search_messages' : 'read_channel';
+            reqBody.query = taskLabel;
+          }
+          let data;
+          if (IS_TAURI) {
+            data = await tauriInvoke('slack_proxy', {
+              request: { action: reqBody.action, channel: reqBody.channel || null, text: reqBody.text || null, query: reqBody.query || null },
+            });
+          } else {
+            const resp = await fetch('/api/slack', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(reqBody),
+            });
+            data = await resp.json();
+          }
+          if (data.ok === false && data.error) throw new Error(data.error);
+          if (reqBody.action === 'list_channels' && data.channels) {
+            return '📋 RESULT — Slack channels (' + ws + ') [LIVE]:\n' +
+              data.channels.slice(0, 8).map(c => '  #' + c.name.padEnd(20) + (c.num_members || '?') + ' members').join('\n');
+          }
+          if (reqBody.action === 'send_message') {
+            return '📋 RESULT — Message sent to Slack [LIVE]:\n' +
+              '  Channel: ' + (data.channel || 'unknown') + '\n  Status: Delivered ✓\n  ts: ' + (data.ts || '');
+          }
+          return '📋 RESULT — Slack [LIVE]:\n  ' + JSON.stringify(data).slice(0, 500);
+        } catch (e) {
+          return '❌ Slack API error: ' + (e.message || e);
+        }
       }
-      if (label.includes('message') || label.includes('read') || label.includes('search')) {
+      // Simulated fallback
+      if (label.includes('channel') || label.includes('list')) {
         const msgs = [
           { user: 'alice', text: 'Deployed v2.3 to staging', time: '10:42 AM' },
           { user: 'bob', text: 'PR #87 is ready for review', time: '10:38 AM' },
@@ -1630,11 +2086,43 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
     }
 
     case 'web': {
-      return await askChatGPT(taskLabel, agentId);
+      return await askLLM(taskLabel, agentId);
     }
 
     case 'atlassian': {
       const domain = cv.domain || 'site.atlassian.net';
+      // Try live Atlassian REST API if configured
+      if (cv.domain && cv.email && cv.apiToken) {
+        try {
+          const authHeader = 'Basic ' + btoa(cv.email + ':' + cv.apiToken);
+          const headers = { 'Authorization': authHeader, 'Accept': 'application/json' };
+          const baseUrl = cv.domain.replace(/\/+$/, '');
+          if (label.includes('confluence') || label.includes('page') || label.includes('doc')) {
+            const resp = await fetch(baseUrl + '/wiki/rest/api/content?limit=5&orderby=modified%20desc', { headers });
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            const data = await resp.json();
+            const pages = (data.results || []).slice(0, 5);
+            if (pages.length) {
+              return '📋 RESULT — Confluence pages [LIVE]:\n' +
+                pages.map((p, i) => '  ' + (i + 1) + '. ' + p.title).join('\n');
+            }
+          }
+          // Default: search Jira issues
+          const jql = encodeURIComponent('order by updated DESC');
+          const resp = await fetch(baseUrl + '/rest/api/3/search?jql=' + jql + '&maxResults=5', { headers });
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
+          const data = await resp.json();
+          const issues = (data.issues || []).slice(0, 5);
+          if (issues.length) {
+            return '📋 RESULT — Jira Issues (' + domain + ') [LIVE]:\n' +
+              issues.map(i => '  ' + i.key + '  ' + (i.fields.summary || '') + '\n         Status: ' + (i.fields.status?.name || '?') + '  |  Assignee: @' + (i.fields.assignee?.displayName || 'unassigned')).join('\n');
+          }
+          return '📋 RESULT — Atlassian (' + domain + ') [LIVE]:\n  ' + (data.total || 0) + ' total issues';
+        } catch (e) {
+          return '❌ Atlassian API error: ' + (e.message || e);
+        }
+      }
+      // Simulated fallback
       if (label.includes('issue') || label.includes('jira') || label.includes('ticket') || label.includes('bug')) {
         const issues = [
           { key: 'PROJ-142', summary: 'Refactor authentication module', status: 'In Progress', assignee: 'alice' },
@@ -1663,6 +2151,37 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
 
     case 'hubspot': {
       const portal = cv.portalId || 'unknown';
+      // Try live HubSpot API if configured
+      if (cv.apiKey) {
+        try {
+          const headers = { 'Authorization': 'Bearer ' + cv.apiKey, 'Content-Type': 'application/json' };
+          if (label.includes('contact') || label.includes('customer') || label.includes('lead')) {
+            const resp = await fetch('https://api.hubapi.com/crm/v3/objects/contacts?limit=5', { headers });
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            const data = await resp.json();
+            const contacts = (data.results || []).slice(0, 5);
+            return '📋 RESULT — HubSpot Contacts (portal ' + portal + ') [LIVE]:\n' +
+              contacts.map(c => '  ' + (c.properties.firstname || '') + ' ' + (c.properties.lastname || '') + '  ' + (c.properties.email || '')).join('\n') + '\n' +
+              '  Total: ' + (data.total || contacts.length) + ' contacts';
+          }
+          if (label.includes('deal') || label.includes('pipeline') || label.includes('revenue')) {
+            const resp = await fetch('https://api.hubapi.com/crm/v3/objects/deals?limit=5', { headers });
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            const data = await resp.json();
+            return '📋 RESULT — HubSpot Deals [LIVE]:\n' +
+              (data.results || []).slice(0, 5).map(d => '  ' + (d.properties.dealname || 'Unnamed') + '  $' + (d.properties.amount || '0')).join('\n');
+          }
+          // Generic: list contacts
+          const resp = await fetch('https://api.hubapi.com/crm/v3/objects/contacts?limit=3', { headers });
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
+          const data = await resp.json();
+          return '📋 RESULT — HubSpot (portal ' + portal + ') [LIVE]:\n' +
+            '  Contacts: ' + (data.total || 0);
+        } catch (e) {
+          return '❌ HubSpot API error: ' + (e.message || e);
+        }
+      }
+      // Simulated fallback
       if (label.includes('contact') || label.includes('customer') || label.includes('lead')) {
         const contacts = [
           { name: 'Acme Corp', email: 'info@acme.com', stage: 'Customer', value: '$24,000' },
@@ -1686,6 +2205,563 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
         '  Contacts: ' + (50 + Math.floor(Math.random() * 200)) + '\n' +
         '  Open deals: ' + (3 + Math.floor(Math.random() * 10)) + '\n' +
         '  Tickets: ' + (2 + Math.floor(Math.random() * 8)) + ' open';
+    }
+
+    case 'aws': {
+      const region = cv.region || 'us-east-1';
+      // AWS APIs require SigV4 signing — not feasible from browser.
+      // When configured, route through ChatGPT to describe what calls would be made.
+      if (cv.accessKeyId && cv.secretAccessKey) {
+        try {
+          const awsPrompt = 'You are an AWS CLI expert. The user wants to: "' + taskLabel +
+            '" in region ' + region + '. Describe what AWS API calls you would make and provide realistic sample output. Be concise.';
+          return await askLLM(awsPrompt, agentId);
+        } catch (e) {
+          // fall through to simulated
+        }
+      }
+      // Simulated fallback
+      if (label.includes('ec2') || label.includes('instance') || label.includes('server')) {
+        const instances = [
+          { id: 'i-0a1b2c3d', type: 't3.medium', state: 'running', name: 'web-prod-1' },
+          { id: 'i-4e5f6a7b', type: 't3.large', state: 'running', name: 'api-prod-1' },
+          { id: 'i-8c9d0e1f', type: 'r5.xlarge', state: 'running', name: 'db-replica' },
+          { id: 'i-2a3b4c5d', type: 't3.micro', state: 'stopped', name: 'dev-sandbox' },
+        ];
+        const picked = instances.sort(() => Math.random() - 0.5).slice(0, 3);
+        return '📋 RESULT — EC2 Instances (' + region + '):\n' +
+          picked.map(i => '  ' + i.id + '  ' + i.name.padEnd(16) + i.type.padEnd(14) + i.state).join('\n');
+      }
+      if (label.includes('s3') || label.includes('bucket') || label.includes('storage')) {
+        const buckets = ['app-assets-prod', 'data-lake-raw', 'backups-daily', 'logs-archive', 'static-site'];
+        const picked = buckets.sort(() => Math.random() - 0.5).slice(0, 3);
+        return '📋 RESULT — S3 Buckets:\n' +
+          picked.map(b => '  🪣 ' + b + '  (' + (0.1 + Math.random() * 50).toFixed(1) + ' GB)').join('\n');
+      }
+      if (label.includes('lambda') || label.includes('function') || label.includes('serverless')) {
+        return '📋 RESULT — Lambda Functions (' + region + '):\n' +
+          '  process-orders     Node.js 20  128 MB  avg ' + (50 + Math.floor(Math.random() * 400)) + 'ms\n' +
+          '  resize-images      Python 3.12  512 MB  avg ' + (200 + Math.floor(Math.random() * 800)) + 'ms\n' +
+          '  send-notifications  Node.js 20  128 MB  avg ' + (30 + Math.floor(Math.random() * 100)) + 'ms';
+      }
+      return '📋 RESULT — AWS (' + region + '):\n' +
+        '  EC2: ' + (2 + Math.floor(Math.random() * 6)) + ' instances (' + (1 + Math.floor(Math.random() * 4)) + ' running)\n' +
+        '  S3: ' + (3 + Math.floor(Math.random() * 5)) + ' buckets\n' +
+        '  Lambda: ' + (2 + Math.floor(Math.random() * 8)) + ' functions active';
+    }
+
+    case 'email': {
+      const from = cv.fromAddress || 'noreply@app.com';
+      // Try live SendGrid API via server proxy
+      if (cv.apiKey) {
+        try {
+          if (label.includes('send') || label.includes('notify') || label.includes('alert')) {
+            let data;
+            if (IS_TAURI) {
+              data = await tauriInvoke('email_proxy', {
+                request: { action: 'send_email', from: from, text: taskLabel, to: null, subject: null, html: null },
+              });
+            } else {
+              const resp = await fetch('/api/email', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ apiKey: cv.apiKey, action: 'send_email', from, text: taskLabel }),
+              });
+              data = await resp.json();
+            }
+            return '📋 RESULT — Email [LIVE]:\n  Status: ' + (data.ok ? 'Sent ✓' : 'HTTP ' + data.status) + '\n  From: ' + from;
+          }
+          if (label.includes('stat') || label.includes('deliverability') || label.includes('report')) {
+            let data;
+            if (IS_TAURI) {
+              data = await tauriInvoke('email_proxy', {
+                request: { action: 'get_stats', to: null, from: null, subject: null, html: null, text: null },
+              });
+            } else {
+              const resp = await fetch('/api/email', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ apiKey: cv.apiKey, action: 'get_stats' }),
+              });
+              data = await resp.json();
+            }
+            if (Array.isArray(data) && data.length) {
+              const s = data[0].stats?.[0]?.metrics || {};
+              return '📋 RESULT — Email Stats [LIVE]:\n' +
+                '  Requests: ' + (s.requests || 0) + '\n  Delivered: ' + (s.delivered || 0) + '\n  Opens: ' + (s.opens || 0) + '\n  Bounces: ' + (s.bounces || 0);
+            }
+            return '📋 RESULT — Email Stats [LIVE]:\n  ' + JSON.stringify(data).slice(0, 400);
+          }
+        } catch (e) {
+          return '❌ Email API error: ' + (e.message || e);
+        }
+      }
+      // Simulated fallback
+      if (label.includes('send') || label.includes('notify') || label.includes('alert')) {
+        return '📋 RESULT — Email sent:\n' +
+          '  From: ' + from + '\n' +
+          '  To: ' + (1 + Math.floor(Math.random() * 10)) + ' recipient(s)\n' +
+          '  Status: Queued for delivery ✓\n' +
+          '  Message ID: msg_' + Math.random().toString(36).slice(2, 10);
+      }
+      if (label.includes('stat') || label.includes('deliverability') || label.includes('report')) {
+        return '📋 RESULT — Email Stats (last 7 days):\n' +
+          '  Sent: ' + (100 + Math.floor(Math.random() * 5000)) + '\n' +
+          '  Delivered: ' + (95 + Math.floor(Math.random() * 5)) + '%\n' +
+          '  Opened: ' + (20 + Math.floor(Math.random() * 40)) + '%\n' +
+          '  Bounced: ' + (Math.random() * 3).toFixed(1) + '%';
+      }
+      return '📋 RESULT — Email (' + from + '):\n' +
+        '  ' + (1 + Math.floor(Math.random() * 5)) + ' email(s) processed\n' +
+        '  Delivery rate: ' + (95 + Math.floor(Math.random() * 5)) + '%';
+    }
+
+    case 'calendar': {
+      const provider = cv.provider || 'google';
+      // Try live Google Calendar API if OAuth token is configured
+      if (cv.oauthToken && (provider === 'google' || provider === 'Google')) {
+        try {
+          const now = new Date().toISOString();
+          const endOfDay = new Date();
+          endOfDay.setHours(23, 59, 59, 999);
+          const calId = cv.calendarId || 'primary';
+          const url = 'https://www.googleapis.com/calendar/v3/calendars/' + encodeURIComponent(calId) +
+            '/events?timeMin=' + encodeURIComponent(now) + '&timeMax=' + encodeURIComponent(endOfDay.toISOString()) +
+            '&singleEvents=true&orderBy=startTime&maxResults=8';
+          const resp = await fetch(url, { headers: { 'Authorization': 'Bearer ' + cv.oauthToken } });
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
+          const data = await resp.json();
+          const events = (data.items || []).slice(0, 6);
+          if (events.length) {
+            return '📋 RESULT — Calendar Events (' + provider + ') [LIVE]:\n' +
+              events.map(e => {
+                const start = e.start?.dateTime ? new Date(e.start.dateTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'All day';
+                return '  📅 ' + start + ' — ' + (e.summary || 'No title') + ' (' + (e.attendees?.length || 0) + ' attendees)';
+              }).join('\n');
+          }
+          return '📋 RESULT — Calendar [LIVE]:\n  No more events today';
+        } catch (e) {
+          return '❌ Calendar API error: ' + (e.message || e);
+        }
+      }
+      // Simulated fallback
+      if (label.includes('event') || label.includes('meeting') || label.includes('schedule') || label.includes('today')) {
+        const events = [
+          { title: 'Sprint Planning', time: '9:00 AM', duration: '1h', attendees: 6 },
+          { title: 'Design Review', time: '11:00 AM', duration: '45m', attendees: 4 },
+          { title: '1:1 with Manager', time: '1:00 PM', duration: '30m', attendees: 2 },
+          { title: 'Team Standup', time: '3:00 PM', duration: '15m', attendees: 8 },
+          { title: 'Retrospective', time: '4:00 PM', duration: '1h', attendees: 7 },
+        ];
+        const picked = events.sort(() => Math.random() - 0.5).slice(0, 3);
+        return '📋 RESULT — Calendar Events (' + provider + '):\n' +
+          picked.map(e => '  📅 ' + e.time + ' — ' + e.title + ' (' + e.duration + ', ' + e.attendees + ' attendees)').join('\n');
+      }
+      if (label.includes('free') || label.includes('available') || label.includes('slot')) {
+        return '📋 RESULT — Availability:\n' +
+          '  Free slots today:\n' +
+          '  ✅ 10:00 AM – 11:00 AM\n' +
+          '  ✅ 2:00 PM – 3:00 PM\n' +
+          '  ✅ 5:00 PM – 6:00 PM';
+      }
+      return '📋 RESULT — Calendar (' + provider + '):\n' +
+        '  ' + (3 + Math.floor(Math.random() * 6)) + ' events today\n' +
+        '  Next: Team Standup at 3:00 PM\n' +
+        '  ' + (1 + Math.floor(Math.random() * 4)) + ' free slot(s) remaining';
+    }
+
+    case 'monitoring': {
+      const provider = cv.provider || 'datadog';
+      // Try live Datadog API if configured
+      if (cv.apiKey && (provider === 'datadog' || provider === 'Datadog')) {
+        try {
+          const headers = { 'DD-API-KEY': cv.apiKey, 'Content-Type': 'application/json' };
+          if (cv.appKey) headers['DD-APPLICATION-KEY'] = cv.appKey;
+          const resp = await fetch('https://api.datadoghq.com/api/v1/monitor?page=0&page_size=5', { headers });
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
+          const monitors = await resp.json();
+          if (Array.isArray(monitors) && monitors.length) {
+            return '📋 RESULT — Datadog Monitors [LIVE]:\n' +
+              monitors.slice(0, 5).map(m => '  ' + (m.overall_state === 'OK' ? '🟢' : m.overall_state === 'Alert' ? '🔴' : '🟡') +
+                ' ' + (m.name || 'Unnamed') + '  (' + (m.overall_state || '?') + ')').join('\n');
+          }
+        } catch (e) {
+          return '❌ Datadog API error: ' + (e.message || e);
+        }
+      }
+      // Simulated fallback
+      if (label.includes('alert') || label.includes('incident') || label.includes('issue') || label.includes('down')) {
+        const alerts = [
+          { severity: '🔴 CRITICAL', name: 'API latency > 5s', triggered: '12 min ago' },
+          { severity: '🟡 WARNING', name: 'CPU usage > 80%', triggered: '47 min ago' },
+          { severity: '🟡 WARNING', name: 'Disk space < 15%', triggered: '2h ago' },
+          { severity: '🟢 RESOLVED', name: 'Memory spike on web-prod-1', triggered: '4h ago' },
+        ];
+        const picked = alerts.sort(() => Math.random() - 0.5).slice(0, 3);
+        return '📋 RESULT — Alerts (' + provider + '):\n' +
+          picked.map(a => '  ' + a.severity + '  ' + a.name + '  (triggered ' + a.triggered + ')').join('\n');
+      }
+      if (label.includes('metric') || label.includes('health') || label.includes('status')) {
+        return '📋 RESULT — System Health:\n' +
+          '  API latency (p99): ' + (50 + Math.floor(Math.random() * 300)) + 'ms\n' +
+          '  Error rate: ' + (Math.random() * 2).toFixed(2) + '%\n' +
+          '  Uptime (30d): ' + (99 + Math.random()).toFixed(2) + '%\n' +
+          '  CPU avg: ' + (20 + Math.floor(Math.random() * 50)) + '%  |  Memory: ' + (40 + Math.floor(Math.random() * 40)) + '%';
+      }
+      return '📋 RESULT — Monitoring (' + provider + '):\n' +
+        '  ' + Math.floor(Math.random() * 3) + ' critical, ' + (1 + Math.floor(Math.random() * 5)) + ' warning alerts\n' +
+        '  Overall status: ' + ['HEALTHY 🟢', 'DEGRADED 🟡', 'HEALTHY 🟢'][Math.floor(Math.random() * 3)];
+    }
+
+    case 'docker': {
+      const ns = cv.namespace || 'default';
+      // Try live Docker API if endpoint is configured
+      if (cv.endpoint) {
+        try {
+          const baseUrl = cv.endpoint.replace(/\/+$/, '');
+          if (label.includes('pod') || label.includes('k8s') || label.includes('kubernetes') || label.includes('deploy')) {
+            const resp = await fetch(baseUrl + '/api/v1/namespaces/' + encodeURIComponent(ns) + '/pods?limit=10');
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            const data = await resp.json();
+            const pods = (data.items || []).slice(0, 6);
+            return '📋 RESULT — Pods (ns: ' + ns + ') [LIVE]:\n' +
+              pods.map(p => '  ' + (p.status?.phase === 'Running' ? '🟢' : '⚪') + ' ' +
+                p.metadata.name + '  ' + (p.status?.phase || '?') + '  restarts=' +
+                (p.status?.containerStatuses?.[0]?.restartCount || 0)).join('\n');
+          }
+          // Docker containers
+          const resp = await fetch(baseUrl + '/containers/json?all=true&limit=10');
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
+          const containers = await resp.json();
+          return '📋 RESULT — Containers [LIVE]:\n' +
+            containers.slice(0, 6).map(c => '  🐳 ' + (c.Names?.[0] || '?').replace(/^\//, '').padEnd(20) +
+              (c.Image || '?').padEnd(24) + (c.State || '?')).join('\n');
+        } catch (e) {
+          return '❌ Docker/K8s API error: ' + (e.message || e);
+        }
+      }
+      // Simulated fallback
+      if (label.includes('container') || label.includes('docker') || label.includes('list')) {
+        const containers = [
+          { name: 'web-app', image: 'node:20-alpine', status: 'Up 3 days', ports: '3000→3000' },
+          { name: 'api-server', image: 'node:20-alpine', status: 'Up 3 days', ports: '8080→8080' },
+          { name: 'postgres', image: 'postgres:16', status: 'Up 5 days', ports: '5432→5432' },
+          { name: 'redis', image: 'redis:7-alpine', status: 'Up 5 days', ports: '6379→6379' },
+          { name: 'nginx', image: 'nginx:latest', status: 'Up 3 days', ports: '80→80,443→443' },
+        ];
+        const picked = containers.sort(() => Math.random() - 0.5).slice(0, 4);
+        return '📋 RESULT — Containers:\n' +
+          picked.map(c => '  🐳 ' + c.name.padEnd(14) + c.image.padEnd(20) + c.status.padEnd(14) + c.ports).join('\n');
+      }
+      if (label.includes('pod') || label.includes('k8s') || label.includes('kubernetes') || label.includes('deploy')) {
+        const pods = [
+          { name: 'web-app-7f8d9-abc12', status: 'Running', restarts: 0, age: '3d' },
+          { name: 'api-server-5c6e7-def34', status: 'Running', restarts: 0, age: '3d' },
+          { name: 'worker-8a9b0-ghi56', status: 'Running', restarts: 1, age: '2d' },
+          { name: 'cronjob-1b2c3-jkl78', status: 'Completed', restarts: 0, age: '1h' },
+        ];
+        return '📋 RESULT — Pods (ns: ' + ns + '):\n' +
+          pods.map(p => '  ' + (p.status === 'Running' ? '🟢' : '⚪') + ' ' + p.name + '  ' + p.status + '  restarts=' + p.restarts + '  age=' + p.age).join('\n');
+      }
+      return '📋 RESULT — Docker / K8s:\n' +
+        '  Containers: ' + (3 + Math.floor(Math.random() * 6)) + ' running, ' + Math.floor(Math.random() * 2) + ' stopped\n' +
+        '  Pods (' + ns + '): ' + (4 + Math.floor(Math.random() * 8)) + ' healthy\n' +
+        '  Images: ' + (5 + Math.floor(Math.random() * 10)) + ' cached';
+    }
+
+    case 'notion': {
+      const provider = cv.provider || 'notion';
+      // Try live Notion API if configured
+      if (cv.apiKey && (provider === 'notion' || provider === 'Notion')) {
+        try {
+          const headers = {
+            'Authorization': 'Bearer ' + cv.apiKey,
+            'Content-Type': 'application/json',
+            'Notion-Version': '2022-06-28',
+          };
+          if (label.includes('page') || label.includes('doc') || label.includes('note') || label.includes('search')) {
+            const resp = await fetch('https://api.notion.com/v1/search', {
+              method: 'POST', headers,
+              body: JSON.stringify({ query: taskLabel, page_size: 5 }),
+            });
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            const data = await resp.json();
+            const pages = (data.results || []).filter(r => r.object === 'page').slice(0, 5);
+            if (pages.length) {
+              return '📋 RESULT — Notion Pages [LIVE]:\n' +
+                pages.map((p, i) => {
+                  const title = p.properties?.title?.title?.[0]?.plain_text || p.properties?.Name?.title?.[0]?.plain_text || 'Untitled';
+                  return '  ' + (i + 1) + '. ' + title;
+                }).join('\n');
+            }
+          }
+          // Generic search
+          const resp = await fetch('https://api.notion.com/v1/search', {
+            method: 'POST', headers,
+            body: JSON.stringify({ page_size: 5 }),
+          });
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
+          const data = await resp.json();
+          return '📋 RESULT — Notion [LIVE]:\n  ' + (data.results?.length || 0) + ' items found in workspace';
+        } catch (e) {
+          return '❌ Notion API error: ' + (e.message || e);
+        }
+      }
+      // Try live Linear API if configured
+      if (cv.apiKey && (provider === 'linear' || provider === 'Linear')) {
+        try {
+          const resp = await fetch('https://api.linear.app/graphql', {
+            method: 'POST',
+            headers: { 'Authorization': cv.apiKey, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: '{ issues(first: 5, orderBy: updatedAt) { nodes { identifier title state { name } assignee { name } } } }' }),
+          });
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
+          const data = await resp.json();
+          const issues = data.data?.issues?.nodes || [];
+          if (issues.length) {
+            return '📋 RESULT — Linear Issues [LIVE]:\n' +
+              issues.map(i => '  ' + i.identifier + '  ' + i.title + '  (' + (i.state?.name || '?') + ', @' + (i.assignee?.name || 'unassigned') + ')').join('\n');
+          }
+        } catch (e) {
+          return '❌ Linear API error: ' + (e.message || e);
+        }
+      }
+      // Simulated fallback
+      if (label.includes('page') || label.includes('doc') || label.includes('note') || label.includes('search')) {
+        const pages = [
+          { title: 'Q1 Product Roadmap', updated: '2d ago', author: 'alice' },
+          { title: 'API Design Principles', updated: '5d ago', author: 'bob' },
+          { title: 'Onboarding Checklist', updated: '1w ago', author: 'carol' },
+          { title: 'Architecture Decision Records', updated: '3d ago', author: 'dave' },
+        ];
+        const picked = pages.sort(() => Math.random() - 0.5).slice(0, 3);
+        return '📋 RESULT — ' + provider + ' Pages:\n' +
+          picked.map((p, i) => '  ' + (i + 1) + '. ' + p.title + '  (updated ' + p.updated + ' by @' + p.author + ')').join('\n');
+      }
+      if (label.includes('issue') || label.includes('sprint') || label.includes('board') || label.includes('task')) {
+        return '📋 RESULT — ' + provider + ' Board:\n' +
+          '  Sprint ' + (10 + Math.floor(Math.random() * 10)) + ' — ' + (3 + Math.floor(Math.random() * 8)) + ' items in progress\n' +
+          '  Backlog: ' + (10 + Math.floor(Math.random() * 30)) + ' items\n' +
+          '  Completed this sprint: ' + (5 + Math.floor(Math.random() * 10));
+      }
+      return '📋 RESULT — ' + provider + ':\n' +
+        '  ' + (5 + Math.floor(Math.random() * 15)) + ' pages matching query\n' +
+        '  Last updated: ' + (1 + Math.floor(Math.random() * 7)) + 'd ago';
+    }
+
+    case 'search': {
+      const provider = cv.provider || 'brave';
+      // Try live Brave Search API if configured
+      if (cv.apiKey && (provider === 'brave' || provider === 'Brave')) {
+        try {
+          const resp = await fetch('https://api.search.brave.com/res/v1/web/search?q=' + encodeURIComponent(taskLabel) + '&count=5', {
+            headers: { 'Accept': 'application/json', 'Accept-Encoding': 'gzip', 'X-Subscription-Token': cv.apiKey },
+          });
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
+          const data = await resp.json();
+          const results = (data.web?.results || []).slice(0, 5);
+          if (results.length) {
+            return '📋 RESULT — Brave Search [LIVE]:\n' +
+              results.map((r, i) => '  ' + (i + 1) + '. ' + r.title + '\n     ' + r.url + '\n     ' + (r.description || '').slice(0, 120)).join('\n');
+          }
+        } catch (e) {
+          return '❌ Brave Search error: ' + (e.message || e);
+        }
+      }
+      // Try live Tavily API if configured
+      if (cv.apiKey && (provider === 'tavily' || provider === 'Tavily')) {
+        try {
+          const resp = await fetch('https://api.tavily.com/search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ api_key: cv.apiKey, query: taskLabel, max_results: 5 }),
+          });
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
+          const data = await resp.json();
+          const results = (data.results || []).slice(0, 5);
+          if (results.length) {
+            return '📋 RESULT — Tavily Search [LIVE]:\n' +
+              results.map((r, i) => '  ' + (i + 1) + '. ' + r.title + '\n     ' + r.url + '\n     ' + (r.content || '').slice(0, 120)).join('\n');
+          }
+        } catch (e) {
+          return '❌ Tavily Search error: ' + (e.message || e);
+        }
+      }
+      // Simulated fallback
+      const simResults = [
+        { title: 'Official Documentation — Getting Started', url: 'docs.example.com/start', snippet: 'Step-by-step guide to set up your environment...' },
+        { title: 'Stack Overflow — Best practices for...', url: 'stackoverflow.com/q/123456', snippet: 'The recommended approach is to use...' },
+        { title: 'GitHub — Example Repository', url: 'github.com/example/repo', snippet: 'A reference implementation with full test coverage...' },
+        { title: 'Blog Post — Deep Dive into...', url: 'blog.example.com/deep-dive', snippet: 'In this post we explore the internals of...' },
+        { title: 'Tutorial — Complete Guide', url: 'tutorial.dev/guide', snippet: 'Learn everything you need to know about...' },
+      ];
+      const picked = simResults.sort(() => Math.random() - 0.5).slice(0, 3 + Math.floor(Math.random() * 2));
+      return '📋 RESULT — Web Search (' + provider + '):\n' +
+        picked.map((r, i) => '  ' + (i + 1) + '. ' + r.title + '\n     ' + r.url + '\n     ' + r.snippet).join('\n');
+    }
+
+    case 'stripe': {
+      // Try live Stripe API via server proxy
+      if (cv.secretKey) {
+        try {
+          let action = 'get_balance';
+          if (label.includes('payment') || label.includes('charge') || label.includes('transaction')) action = 'list_payments';
+          else if (label.includes('subscription') || label.includes('recurring') || label.includes('mrr')) action = 'list_subscriptions';
+          else if (label.includes('customer')) action = 'list_customers';
+          let data;
+          if (IS_TAURI) {
+            data = await tauriInvoke('stripe_proxy', {
+              request: { action, limit: 5 },
+            });
+          } else {
+            const resp = await fetch('/api/stripe', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ secretKey: cv.secretKey, action, limit: 5 }),
+            });
+            data = await resp.json();
+          }
+          if (data.error) throw new Error(typeof data.error === 'string' ? data.error : data.error.message || 'Unknown');
+          if (action === 'list_payments' && data.data) {
+            return '📋 RESULT — Stripe Payments [LIVE]:\n' +
+              data.data.slice(0, 5).map(c => '  ' + c.id + '  $' + (c.amount / 100).toFixed(2) + '  ' + c.status + '  ' + (c.customer || '')).join('\n');
+          }
+          if (action === 'list_subscriptions' && data.data) {
+            return '📋 RESULT — Stripe Subscriptions [LIVE]:\n' +
+              '  Active: ' + data.data.filter(s => s.status === 'active').length + '\n' +
+              data.data.slice(0, 5).map(s => '  ' + s.id + '  ' + s.status + '  $' + ((s.plan?.amount || 0) / 100).toFixed(2) + '/' + (s.plan?.interval || 'mo')).join('\n');
+          }
+          if (action === 'get_balance' && data.available) {
+            const bal = data.available.reduce((sum, b) => sum + b.amount, 0) / 100;
+            return '📋 RESULT — Stripe Balance [LIVE]:\n  Available: $' + bal.toFixed(2) + '\n  Pending: $' + (data.pending?.reduce((s, b) => s + b.amount, 0) / 100 || 0).toFixed(2);
+          }
+          return '📋 RESULT — Stripe [LIVE]:\n  ' + JSON.stringify(data).slice(0, 400);
+        } catch (e) {
+          return '❌ Stripe API error: ' + (e.message || e);
+        }
+      }
+      // Simulated fallback
+      if (label.includes('payment') || label.includes('charge') || label.includes('transaction')) {
+        const payments = [
+          { id: 'ch_1abc', amount: '$249.00', status: 'succeeded', customer: 'cus_acme' },
+          { id: 'ch_2def', amount: '$89.99', status: 'succeeded', customer: 'cus_globex' },
+          { id: 'ch_3ghi', amount: '$549.00', status: 'pending', customer: 'cus_initech' },
+          { id: 'ch_4jkl', amount: '$19.99', status: 'succeeded', customer: 'cus_wayne' },
+        ];
+        const picked = payments.sort(() => Math.random() - 0.5).slice(0, 3);
+        return '📋 RESULT — Stripe Payments:\n' +
+          picked.map(p => '  ' + p.id + '  ' + p.amount.padEnd(10) + p.status.padEnd(12) + p.customer).join('\n');
+      }
+      if (label.includes('subscription') || label.includes('recurring') || label.includes('mrr')) {
+        return '📋 RESULT — Stripe Subscriptions:\n' +
+          '  Active: ' + (20 + Math.floor(Math.random() * 200)) + '\n' +
+          '  MRR: $' + ((5 + Math.random() * 50) * 1000).toFixed(0) + '\n' +
+          '  Churn (30d): ' + (1 + Math.random() * 5).toFixed(1) + '%\n' +
+          '  Trial: ' + (3 + Math.floor(Math.random() * 15)) + ' converting';
+      }
+      return '📋 RESULT — Stripe:\n' +
+        '  Balance: $' + ((1 + Math.random() * 20) * 1000).toFixed(2) + '\n' +
+        '  Payments (7d): ' + (10 + Math.floor(Math.random() * 100)) + '\n' +
+        '  Active subscriptions: ' + (20 + Math.floor(Math.random() * 200));
+    }
+
+    case 'analytics': {
+      const provider = cv.provider || 'mixpanel';
+      // Analytics APIs typically require server-side calls; use ChatGPT as smart proxy when configured
+      if (cv.apiKey) {
+        try {
+          const analyticsPrompt = 'You are a ' + provider + ' analytics expert. The user asks: "' + taskLabel +
+            '". Provide realistic analytics data as if querying ' + provider + '. Include metrics, funnels, or retention data as appropriate. Be concise with numbers.';
+          return await askLLM(analyticsPrompt, agentId);
+        } catch (e) {
+          // fall through to simulated
+        }
+      }
+      // Simulated fallback
+      if (label.includes('funnel') || label.includes('conversion') || label.includes('drop')) {
+        return '📋 RESULT — Funnel Analysis (' + provider + '):\n' +
+          '  1. Page View        ' + (10000 + Math.floor(Math.random() * 50000)) + '\n' +
+          '  2. Sign Up          ' + (2000 + Math.floor(Math.random() * 8000)) + '  (' + (20 + Math.floor(Math.random() * 30)) + '%)\n' +
+          '  3. Activation       ' + (500 + Math.floor(Math.random() * 3000)) + '  (' + (15 + Math.floor(Math.random() * 25)) + '%)\n' +
+          '  4. Purchase         ' + (100 + Math.floor(Math.random() * 500)) + '  (' + (5 + Math.floor(Math.random() * 20)) + '%)';
+      }
+      if (label.includes('retention') || label.includes('cohort') || label.includes('churn')) {
+        return '📋 RESULT — Retention (' + provider + '):\n' +
+          '  Day 1:  ' + (40 + Math.floor(Math.random() * 30)) + '%\n' +
+          '  Day 7:  ' + (20 + Math.floor(Math.random() * 20)) + '%\n' +
+          '  Day 30: ' + (8 + Math.floor(Math.random() * 15)) + '%\n' +
+          '  DAU/MAU: ' + (10 + Math.floor(Math.random() * 30)) + '%';
+      }
+      if (label.includes('event') || label.includes('track') || label.includes('metric')) {
+        return '📋 RESULT — Events (' + provider + ', last 24h):\n' +
+          '  page_view:     ' + (5000 + Math.floor(Math.random() * 20000)) + '\n' +
+          '  button_click:  ' + (1000 + Math.floor(Math.random() * 5000)) + '\n' +
+          '  sign_up:       ' + (50 + Math.floor(Math.random() * 500)) + '\n' +
+          '  purchase:      ' + (10 + Math.floor(Math.random() * 100)) + '\n' +
+          '  Total events:  ' + (8000 + Math.floor(Math.random() * 30000));
+      }
+      return '📋 RESULT — Analytics (' + provider + '):\n' +
+        '  Events (24h): ' + (5000 + Math.floor(Math.random() * 30000)) + '\n' +
+        '  Active users: ' + (200 + Math.floor(Math.random() * 2000)) + '\n' +
+        '  Top event: page_view (' + (40 + Math.floor(Math.random() * 30)) + '%)';
+    }
+
+    case 'openclaw': {
+      const gw = cv.gatewayUrl || 'ws://127.0.0.1:18789';
+      const session = cv.sessionId || 'main';
+      // Try live OpenClaw Gateway via server-side proxy
+      if (cv.gatewayUrl) {
+        try {
+          let data;
+          if (IS_TAURI) {
+            data = await tauriInvoke('openclaw_proxy', {
+              request: { session_id: session, message: taskLabel },
+            });
+          } else {
+            const resp = await fetch('/api/openclaw', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                gatewayUrl: cv.gatewayUrl,
+                authToken: cv.authToken || '',
+                sessionId: session,
+                message: taskLabel,
+              }),
+            });
+            data = await resp.json();
+          }
+          if (data.error) throw new Error(data.error);
+          const answer = data.response || data.answer || data.message || JSON.stringify(data).slice(0, 500);
+          return '📋 RESULT — OpenClaw Agent (' + gw + ') [LIVE]:\n' +
+            '  🦞 Session: ' + session + '\n' +
+            '  ' + answer;
+        } catch (e) {
+          return '❌ OpenClaw Gateway error: ' + (e.message || e);
+        }
+      }
+      // Simulated fallback
+      if (label.includes('search') || label.includes('find') || label.includes('web') || label.includes('browse')) {
+        return '📋 RESULT — OpenClaw Agent (' + gw + '):\n' +
+          '  🦞 Session: ' + session + '\n' +
+          '  Routed to browser_control tool...\n' +
+          '  Searched: "' + taskLabel + '"\n' +
+          '  Found ' + (3 + Math.floor(Math.random() * 7)) + ' relevant results\n' +
+          '  Agent completed task in ' + (2 + Math.floor(Math.random() * 15)) + 's';
+      }
+      if (label.includes('run') || label.includes('exec') || label.includes('command') || label.includes('bash')) {
+        return '📋 RESULT — OpenClaw Agent (' + gw + '):\n' +
+          '  🦞 Session: ' + session + '\n' +
+          '  Routed to bash_exec tool...\n' +
+          '  Exit code: 0\n' +
+          '  Output: Command completed successfully\n' +
+          '  Duration: ' + (0.5 + Math.random() * 5).toFixed(1) + 's';
+      }
+      return '📋 RESULT — OpenClaw Agent (' + gw + '):\n' +
+        '  🦞 Session: ' + session + '\n' +
+        '  Task sent to agent runtime via sessions_send\n' +
+        '  Agent processed with ' + (1 + Math.floor(Math.random() * 5)) + ' tool call(s)\n' +
+        '  Thinking: ' + ['low', 'medium', 'high'][Math.floor(Math.random() * 3)] + '\n' +
+        '  Status: Completed ✓';
     }
 
     default: {
@@ -1724,13 +2800,13 @@ async function generateWebSearchResult(taskLabel) {
       '  Found ' + total + ' results. Top ' + items.length + ':\n\n' +
       results.join('\n\n');
   } catch (e) {
-    return '❌ Web search error: ' + e.message + '\n  Could not retrieve results for "' + truncate(query, 40) + '".';
+    return '❌ Web search error: ' + (e.message || e) + '\n  Could not retrieve results for "' + truncate(query, 40) + '".';
   }
 }
 
 async function generateFallbackResult(label, taskLabel, agentId) {
-  // Always forward fallback queries to ChatGPT via AI Query
-  return await askChatGPT(taskLabel, agentId);
+  // Always forward fallback queries to LLM via AI Search
+  return await askLLM(taskLabel, agentId);
 }
 
 function truncate(str, max) {
@@ -1797,19 +2873,24 @@ function handleKeyNavigation(event) {
 function renderMcpCheckboxes() {
   dom.mcpCheckboxes.innerHTML = '';
   mcpAdapters.forEach((adapter) => {
+    const configured = isMcpConfigured(adapter);
     const label = document.createElement('label');
-    label.className = 'mcp-checkbox-label';
+    label.className = 'mcp-checkbox-label' + (configured ? '' : ' mcp-disabled');
+    label.title = configured ? adapter.name : adapter.name + ' — not configured';
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
     checkbox.value = adapter.id;
     checkbox.name = 'mcpAdapter';
 
-    // AI Query is checked by default
-    if (adapter.id === 'web') {
+    if (!configured) {
+      checkbox.disabled = true;
+      checkbox.checked = false;
+    } else if (adapter.id === 'web') {
+      // AI Search is checked by default when configured
       checkbox.checked = true;
     }
 
-    // When any adapter is toggled, update AI Query state
+    // When any adapter is toggled, update AI Search state
     checkbox.addEventListener('change', () => {
       updateAiQueryState();
     });
@@ -1828,15 +2909,23 @@ function renderMcpCheckboxes() {
 function updateAiQueryState() {
   const checkboxes = dom.mcpCheckboxes.querySelectorAll('input[type="checkbox"]');
   const aiQueryCb = Array.from(checkboxes).find(cb => cb.value === 'web');
-  if (!aiQueryCb) return;
-  const othersChecked = Array.from(checkboxes).some(cb => cb.value !== 'web' && cb.checked);
-  // Uncheck AI Query when another adapter is selected, check it when none are
+  if (!aiQueryCb || aiQueryCb.disabled) return;
+  const othersChecked = Array.from(checkboxes).some(cb => cb.value !== 'web' && !cb.disabled && cb.checked);
+  // Uncheck AI Search when another adapter is selected, check it when none are
   aiQueryCb.checked = !othersChecked;
 }
 
 function isMcpConfigured(adapter) {
   const fields = adapter.configFields || [];
   const vals = adapter.configValues || {};
+  // AI Search adapter: always considered configured (server-side OPENAI_API_KEY fallback)
+  // but vendor-specific fields are validated when a vendor is explicitly selected
+  if (adapter.id === 'web') {
+    if (!vals.llmVendor) return true; // no vendor selected = use server-side default
+    const vendorFields = LLM_VENDOR_FIELDS[vals.llmVendor] || [];
+    const required = vendorFields.filter((f) => f.required);
+    return required.every((f) => vals[f.key] && String(vals[f.key]).trim().length > 0);
+  }
   const required = fields.filter((f) => f.required);
   if (!required.length) return true; // no required fields = always OK
   return required.every((f) => vals[f.key] && String(vals[f.key]).trim().length > 0);
@@ -1939,6 +3028,16 @@ function renderMcpConfigList() {
     editBtn.addEventListener('click', () => startEditMcp(adapter.id));
     actions.appendChild(editBtn);
 
+    if (ok) {
+      const clearBtn = document.createElement('button');
+      clearBtn.type = 'button';
+      clearBtn.className = 'clear-config-btn';
+      clearBtn.textContent = '✕ Clear';
+      clearBtn.title = 'Clear configuration and disable adapter';
+      clearBtn.addEventListener('click', () => clearMcpConfig(adapter.id));
+      actions.appendChild(clearBtn);
+    }
+
     const deleteBtn = document.createElement('button');
     deleteBtn.type = 'button';
     deleteBtn.className = 'delete-btn';
@@ -1950,6 +3049,40 @@ function renderMcpConfigList() {
     item.appendChild(info);
     item.appendChild(actions);
     dom.mcpConfigList.appendChild(item);
+  });
+}
+
+/* Render dynamic credential fields for a selected LLM vendor */
+function renderVendorFields(container, vendorId, configInputs, existingValues) {
+  // Remove previous vendor field inputs from configInputs
+  for (const fields of Object.values(LLM_VENDOR_FIELDS)) {
+    for (const f of fields) {
+      delete configInputs[f.key];
+    }
+  }
+  container.innerHTML = '';
+  const fields = LLM_VENDOR_FIELDS[vendorId];
+  if (!fields) return;
+
+  fields.forEach((field) => {
+    const fieldWrap = document.createElement('div');
+    fieldWrap.className = 'mcp-edit-field';
+
+    const label = document.createElement('label');
+    label.className = 'mcp-edit-field-label';
+    label.textContent = field.label + (field.required ? ' *' : '');
+
+    const input = document.createElement('input');
+    input.type = field.type || 'text';
+    input.placeholder = field.placeholder || '';
+    input.value = existingValues[field.key] || '';
+    if (field.required) input.required = true;
+    input.autocomplete = 'off';
+
+    fieldWrap.appendChild(label);
+    fieldWrap.appendChild(input);
+    container.appendChild(fieldWrap);
+    configInputs[field.key] = input;
   });
 }
 
@@ -2013,6 +3146,8 @@ function startEditMcp(mcpId) {
   // Per-adapter config fields (the real juice)
   const configFields = adapter.configFields || [];
   const configInputs = {};
+  // Container for dynamic vendor fields (used by AI Search adapter)
+  let vendorFieldsContainer = null;
 
   if (configFields.length) {
     const configHeader = document.createElement('div');
@@ -2028,17 +3163,56 @@ function startEditMcp(mcpId) {
       label.className = 'mcp-edit-field-label';
       label.textContent = field.label + (field.required ? ' *' : '');
 
-      const input = document.createElement('input');
-      input.type = field.type || 'text';
-      input.placeholder = field.placeholder || '';
-      input.value = (adapter.configValues && adapter.configValues[field.key]) || '';
-      if (field.required) input.required = true;
-      input.autocomplete = 'off';
+      if (field.type === 'select' && field.options) {
+        // Render a dropdown
+        const select = document.createElement('select');
+        select.autocomplete = 'off';
+        if (field.required) select.required = true;
+        field.options.forEach((opt) => {
+          const option = document.createElement('option');
+          option.value = opt.value;
+          option.textContent = opt.label;
+          if ((adapter.configValues && adapter.configValues[field.key]) === opt.value) {
+            option.selected = true;
+          }
+          select.appendChild(option);
+        });
 
-      fieldWrap.appendChild(label);
-      fieldWrap.appendChild(input);
-      editRow.appendChild(fieldWrap);
-      configInputs[field.key] = input;
+        // If this is the vendor selector, wire up dynamic fields
+        if (field.key === 'llmVendor') {
+          vendorFieldsContainer = document.createElement('div');
+          vendorFieldsContainer.className = 'mcp-vendor-fields';
+          select.addEventListener('change', () => {
+            renderVendorFields(vendorFieldsContainer, select.value, configInputs, adapter.configValues || {});
+          });
+        }
+
+        fieldWrap.appendChild(label);
+        fieldWrap.appendChild(select);
+        editRow.appendChild(fieldWrap);
+        configInputs[field.key] = select;
+
+        // Render initial vendor fields if a vendor is already selected
+        if (vendorFieldsContainer) {
+          editRow.appendChild(vendorFieldsContainer);
+          const currentVendor = (adapter.configValues && adapter.configValues[field.key]) || '';
+          if (currentVendor) {
+            renderVendorFields(vendorFieldsContainer, currentVendor, configInputs, adapter.configValues || {});
+          }
+        }
+      } else {
+        const input = document.createElement('input');
+        input.type = field.type || 'text';
+        input.placeholder = field.placeholder || '';
+        input.value = (adapter.configValues && adapter.configValues[field.key]) || '';
+        if (field.required) input.required = true;
+        input.autocomplete = 'off';
+
+        fieldWrap.appendChild(label);
+        fieldWrap.appendChild(input);
+        editRow.appendChild(fieldWrap);
+        configInputs[field.key] = input;
+      }
     });
   }
 
@@ -2060,12 +3234,19 @@ function startEditMcp(mcpId) {
     if (!newName) { pushToast('Name cannot be empty.'); return; }
 
     // Validate required config fields
-    for (const field of configFields) {
+    const allFields = [...configFields];
+    // Include dynamic vendor fields for validation
+    const vendorVal = configInputs.llmVendor ? configInputs.llmVendor.value : '';
+    if (vendorVal && LLM_VENDOR_FIELDS[vendorVal]) {
+      allFields.push(...LLM_VENDOR_FIELDS[vendorVal]);
+    }
+    for (const field of allFields) {
       if (field.required) {
-        const val = configInputs[field.key] ? configInputs[field.key].value.trim() : '';
+        const el = configInputs[field.key];
+        const val = el ? (el.value || '').trim() : '';
         if (!val) {
           pushToast(field.label + ' is required.');
-          configInputs[field.key].focus();
+          if (el && el.focus) el.focus();
           return;
         }
       }
@@ -2076,11 +3257,25 @@ function startEditMcp(mcpId) {
     adapter.description = descInput.value.trim();
     adapter.tools = toolsInput.value.split(',').map((t) => t.trim()).filter(Boolean);
 
-    // Save config values
+    // Save config values (static + dynamic vendor fields)
     if (!adapter.configValues) adapter.configValues = {};
-    for (const field of configFields) {
-      const val = configInputs[field.key] ? configInputs[field.key].value.trim() : '';
+    for (const field of allFields) {
+      const el = configInputs[field.key];
+      const val = el ? (el.value || '').trim() : '';
       adapter.configValues[field.key] = val;
+    }
+    // Clear stale vendor fields if vendor changed
+    if (vendorVal) {
+      const currentKeys = new Set((LLM_VENDOR_FIELDS[vendorVal] || []).map(f => f.key));
+      for (const [vId, vFields] of Object.entries(LLM_VENDOR_FIELDS)) {
+        if (vId !== vendorVal) {
+          for (const f of vFields) {
+            if (!currentKeys.has(f.key)) {
+              delete adapter.configValues[f.key];
+            }
+          }
+        }
+      }
     }
 
     saveMcpAdapters();
@@ -2104,9 +3299,20 @@ function removeMcpAdapter(mcpId) {
     return;
   }
   mcpAdapters.splice(idx, 1);
+  vaultDeleteAdapterCreds(mcpId);
   saveMcpAdapters();
   refreshMcpUI();
   pushToast('Removed "' + adapter.name + '".');
+}
+
+function clearMcpConfig(mcpId) {
+  const adapter = mcpAdapters.find((a) => a.id === mcpId);
+  if (!adapter) return;
+  adapter.configValues = {};
+  vaultDeleteAdapterCreds(mcpId);
+  saveMcpAdapters();
+  refreshMcpUI();
+  pushToast('Cleared "' + adapter.name + '" configuration.');
 }
 
 function handleAddMcp(event) {
@@ -2149,7 +3355,12 @@ function refreshMcpUI() {
   renderMcpConfigList();
 }
 
-function init() {
+async function init() {
+  // Load encrypted adapter data before rendering
+  const loaded = await loadMcpAdapters();
+  mcpAdapters.length = 0;
+  loaded.forEach((a) => mcpAdapters.push(a));
+
   renderRoster();
   renderSidebar();
   renderMcpCheckboxes();

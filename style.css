@@ -43,6 +43,12 @@ body {
   min-width: 0;
 }
 
+.bar-column-row.roster-mcp-row .panel-block {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
 .bar-column-row .panel-block {
   min-width: 0;
   display: flex;
@@ -158,7 +164,7 @@ body {
   max-width: 160px;
 }
 
-input, textarea {
+input, textarea, select {
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.2);
   background: rgba(8, 8, 15, 0.4);
@@ -168,7 +174,7 @@ input, textarea {
   font-family: inherit;
 }
 
-input:focus, textarea:focus {
+input:focus, textarea:focus, select:focus {
   outline: 2px solid var(--accent);
   border-color: transparent;
 }
@@ -395,10 +401,22 @@ input:focus, textarea:focus {
   height: 14px;
 }
 
+.mcp-checkbox-grid label.mcp-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.mcp-checkbox-grid label.mcp-disabled input[type="checkbox"] {
+  pointer-events: none;
+}
+
 .mcp-adapter-list {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  max-height: 200px;
+  overflow-y: auto;
+  padding-right: 0.3rem;
 }
 
 .mcp-adapter-card {
@@ -935,6 +953,15 @@ input:focus, textarea:focus {
   color: var(--accent-strong);
 }
 
+.mcp-config-actions button.clear-config-btn {
+  color: var(--accent);
+}
+
+.mcp-config-actions button.clear-config-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .mcp-config-item.is-default .mcp-config-actions .delete-btn {
   display: none;
 }
@@ -1021,6 +1048,27 @@ input:focus, textarea:focus {
 .mcp-edit-field input {
   font-size: 0.8rem;
   padding: 0.35rem 0.5rem;
+}
+
+.mcp-edit-field select {
+  font-size: 0.8rem;
+  padding: 0.35rem 0.5rem;
+  background: var(--card-bg, #1e1a2e);
+  color: var(--text-color, #e0d0ff);
+  border: 1px solid rgba(255, 179, 71, 0.3);
+  border-radius: 4px;
+}
+
+.mcp-vendor-fields {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  margin-top: 0.25rem;
+  border: 1px dashed rgba(255, 179, 71, 0.25);
+  border-radius: 6px;
+  background: rgba(255, 179, 71, 0.03);
 }
 
 /* Config status badges */
