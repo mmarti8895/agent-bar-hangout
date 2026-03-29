@@ -4,6 +4,10 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
+/* ───────── Tauri IPC bridge ───────── */
+const IS_TAURI = !!(window.__TAURI__ && window.__TAURI__.core);
+const tauriInvoke = IS_TAURI ? window.__TAURI__.core.invoke : null;
+
 /* ───────── DOM refs ───────── */
 const canvas = document.getElementById('barCanvas');
 const dom = {
@@ -80,11 +84,15 @@ const state = {
 
 /* ───────── Agent context helpers (server-side engine) ───────── */
 function clearServerContext(agentId) {
-  fetch('/api/context/clear', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ agentId }),
-  }).catch(() => {}); // fire-and-forget
+  if (IS_TAURI) {
+    tauriInvoke('context_clear', { agentId }).catch(() => {});
+  } else {
+    fetch('/api/context/clear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId }),
+    }).catch(() => {}); // fire-and-forget
+  }
 }
 
 /* ───────── MCP Adapter Registry ───────── */
@@ -113,11 +121,27 @@ const defaultMcpAdapters = [
     configValues: {},
   },
   {
-    id: 'web', name: 'AI Query', icon: '🤖',
-    description: 'LLM-powered queries via ChatGPT',
+    id: 'web', name: 'AI Search', icon: '🤖',
+    description: 'LLM-powered queries via multiple AI vendors',
     tools: ['ask_llm', 'search_web', 'summarize', 'analyze'],
     isDefault: true,
-    configFields: [],
+    configFields: [
+      { key: 'llmVendor', label: 'LLM Vendor', type: 'select', required: true,
+        options: [
+          { value: '', label: '— Select a vendor —' },
+          { value: 'openai', label: 'ChatGPT (OpenAI)' },
+          { value: 'anthropic', label: 'Claude (Anthropic)' },
+          { value: 'google', label: 'Gemini (Google)' },
+          { value: 'xai', label: 'Grok (xAI)' },
+          { value: 'deepseek', label: 'DeepSeek' },
+          { value: 'ollama', label: 'Ollama (Local)' },
+          { value: 'mistral', label: 'Mistral AI' },
+          { value: 'cohere', label: 'Cohere' },
+          { value: 'perplexity', label: 'Perplexity' },
+        ],
+      },
+    ],
+    // Dynamic fields rendered per vendor — see LLM_VENDOR_FIELDS below
     configValues: {},
   },
   {
@@ -302,33 +326,192 @@ const defaultMcpAdapters = [
 ];
 
 const MCP_STORAGE_KEY = 'agentBarHangout_mcpAdapters';
+const MCP_CRYPTO_KEY_STORE = 'agentBarHangout_ck';
 
-function loadMcpAdapters() {
+/* ───────── Credential encryption (AES-256-GCM via Web Crypto) ───────── */
+/* In Tauri mode, credentials are stored in OS keyring via vault commands.
+   In browser mode, fall back to Web Crypto AES-256-GCM + localStorage. */
+async function getCryptoKey() {
+  const stored = localStorage.getItem(MCP_CRYPTO_KEY_STORE);
+  if (stored) {
+    const jwk = JSON.parse(stored);
+    return crypto.subtle.importKey('jwk', jwk, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
+  }
+  const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+  const jwk = await crypto.subtle.exportKey('jwk', key);
+  localStorage.setItem(MCP_CRYPTO_KEY_STORE, JSON.stringify(jwk));
+  return key;
+}
+
+async function encryptData(data) {
+  const key = await getCryptoKey();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encoded = new TextEncoder().encode(JSON.stringify(data));
+  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
+  return JSON.stringify({ v: 1, iv: Array.from(iv), d: Array.from(new Uint8Array(encrypted)) });
+}
+
+async function decryptData(raw) {
+  const obj = JSON.parse(raw);
+  if (!obj.v) return obj; // legacy plaintext JSON (array) — return as-is
+  const key = await getCryptoKey();
+  const decrypted = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: new Uint8Array(obj.iv) },
+    key,
+    new Uint8Array(obj.d),
+  );
+  return JSON.parse(new TextDecoder().decode(decrypted));
+}
+
+/* ───────── Tauri vault helpers ───────── */
+async function vaultStoreAdapterCreds(adapterId, configValues) {
+  if (!IS_TAURI) return;
+  await tauriInvoke('vault_store', { key: 'adapter_' + adapterId, value: JSON.stringify(configValues) });
+}
+
+async function vaultGetAdapterCreds(adapterId) {
+  if (!IS_TAURI) return null;
+  try {
+    const raw = await tauriInvoke('vault_get', { key: 'adapter_' + adapterId });
+    return JSON.parse(raw);
+  } catch { return null; }
+}
+
+async function vaultDeleteAdapterCreds(adapterId) {
+  if (!IS_TAURI) return;
+  await tauriInvoke('vault_delete', { key: 'adapter_' + adapterId }).catch(() => {});
+}
+
+async function loadMcpAdapters() {
+  if (IS_TAURI) {
+    // In Tauri: adapter metadata in localStorage, credentials in OS vault
+    try {
+      const saved = localStorage.getItem(MCP_STORAGE_KEY);
+      let parsed = null;
+      if (saved) {
+        try { parsed = JSON.parse(saved); } catch { parsed = null; }
+        if (!Array.isArray(parsed)) parsed = null;
+      }
+      const merged = defaultMcpAdapters.map((def) => {
+        const s = parsed ? parsed.find(p => p.id === def.id) : null;
+        return { ...def, configValues: s ? { ...(def.configValues || {}), ...(s.configValues || {}) } : { ...(def.configValues || {}) } };
+      });
+      if (parsed) {
+        const defaultIds = new Set(defaultMcpAdapters.map(d => d.id));
+        parsed.forEach(s => {
+          if (!defaultIds.has(s.id)) merged.push({ ...s, configFields: s.configFields || [], configValues: s.configValues || {} });
+        });
+      }
+      // Restore credentials from vault for each adapter
+      for (const adapter of merged) {
+        const vaultCreds = await vaultGetAdapterCreds(adapter.id);
+        if (vaultCreds) {
+          adapter.configValues = { ...(adapter.configValues || {}), ...vaultCreds };
+        }
+      }
+      return merged;
+    } catch { /* fall through */ }
+    return defaultMcpAdapters.map(a => ({ ...a, configValues: { ...(a.configValues || {}) } }));
+  }
+  // Browser mode: encrypted localStorage
   try {
     const saved = localStorage.getItem(MCP_STORAGE_KEY);
     if (saved) {
-      const parsed = JSON.parse(saved);
+      const parsed = await decryptData(saved);
       if (Array.isArray(parsed) && parsed.length) {
-        // Merge saved config with defaults to pick up any new configFields
-        return parsed.map((saved) => {
-          const def = defaultMcpAdapters.find((d) => d.id === saved.id);
+        const savedById = new Map(parsed.map((s) => [s.id, s]));
+
+        // Start with all defaults, merging saved configValues on top
+        const merged = defaultMcpAdapters.map((def) => {
+          const s = savedById.get(def.id);
           return {
-            ...saved,
-            configFields: saved.configFields || (def ? def.configFields : []) || [],
-            configValues: saved.configValues || {},
+            ...def,
+            configValues: s ? { ...(def.configValues || {}), ...(s.configValues || {}) } : { ...(def.configValues || {}) },
           };
         });
+
+        // Append any custom (non-default) adapters the user added
+        const defaultIds = new Set(defaultMcpAdapters.map((d) => d.id));
+        parsed.forEach((s) => {
+          if (!defaultIds.has(s.id)) {
+            merged.push({ ...s, configFields: s.configFields || [], configValues: s.configValues || {} });
+          }
+        });
+
+        return merged;
       }
     }
-  } catch (_) { /* ignore corrupt data */ }
+  } catch (_) { /* ignore corrupt / decryption failure — start fresh */ }
   return defaultMcpAdapters.map((a) => ({ ...a, configValues: { ...(a.configValues || {}) } }));
 }
 
-function saveMcpAdapters() {
-  localStorage.setItem(MCP_STORAGE_KEY, JSON.stringify(mcpAdapters));
+async function saveMcpAdapters() {
+  if (IS_TAURI) {
+    // In Tauri: store credentials in OS vault, metadata (without secrets) in localStorage
+    const metaOnly = mcpAdapters.map(a => {
+      const safeVals = {};
+      const secretKeys = new Set((a.configFields || []).filter(f => f.type === 'password').map(f => f.key));
+      for (const [k, v] of Object.entries(a.configValues || {})) {
+        if (!secretKeys.has(k)) safeVals[k] = v;
+      }
+      return { ...a, configValues: safeVals };
+    });
+    localStorage.setItem(MCP_STORAGE_KEY, JSON.stringify(metaOnly));
+    // Store full credentials (including secrets) in vault
+    for (const a of mcpAdapters) {
+      if (a.configValues && Object.keys(a.configValues).length > 0) {
+        await vaultStoreAdapterCreds(a.id, a.configValues);
+      }
+    }
+    return;
+  }
+  // Browser mode: encrypted localStorage
+  const encrypted = await encryptData(mcpAdapters);
+  localStorage.setItem(MCP_STORAGE_KEY, encrypted);
 }
 
-const mcpAdapters = loadMcpAdapters();
+let mcpAdapters = defaultMcpAdapters.map((a) => ({ ...a, configValues: { ...(a.configValues || {}) } }));
+
+/* ───────── LLM vendor credential definitions ───────── */
+const LLM_VENDOR_FIELDS = {
+  openai: [
+    { key: 'apiKey', label: 'API Key', type: 'password', required: true, placeholder: 'sk-...' },
+    { key: 'orgId', label: 'Organization ID', type: 'text', required: false, placeholder: 'org-... (optional)' },
+    { key: 'model', label: 'Model', type: 'text', required: false, placeholder: 'gpt-4o-mini' },
+  ],
+  anthropic: [
+    { key: 'apiKey', label: 'API Key', type: 'password', required: true, placeholder: 'sk-ant-...' },
+    { key: 'model', label: 'Model', type: 'text', required: false, placeholder: 'claude-sonnet-4-20250514' },
+  ],
+  google: [
+    { key: 'apiKey', label: 'API Key', type: 'password', required: true, placeholder: 'AIza...' },
+    { key: 'model', label: 'Model', type: 'text', required: false, placeholder: 'gemini-2.0-flash' },
+  ],
+  xai: [
+    { key: 'apiKey', label: 'API Key', type: 'password', required: true, placeholder: 'xai-...' },
+    { key: 'model', label: 'Model', type: 'text', required: false, placeholder: 'grok-3' },
+  ],
+  deepseek: [
+    { key: 'apiKey', label: 'API Key', type: 'password', required: true, placeholder: 'sk-...' },
+    { key: 'model', label: 'Model', type: 'text', required: false, placeholder: 'deepseek-chat' },
+  ],
+  ollama: [
+    { key: 'endpoint', label: 'Endpoint URL', type: 'text', required: true, placeholder: 'http://localhost:11434' },
+    { key: 'model', label: 'Model', type: 'text', required: true, placeholder: 'llama3, mistral, codellama...' },
+  ],
+  mistral: [
+    { key: 'apiKey', label: 'API Key', type: 'password', required: true, placeholder: 'your-api-key' },
+    { key: 'model', label: 'Model', type: 'text', required: false, placeholder: 'mistral-large-latest' },
+  ],
+  cohere: [
+    { key: 'apiKey', label: 'API Key', type: 'password', required: true, placeholder: 'your-api-key' },
+    { key: 'model', label: 'Model', type: 'text', required: false, placeholder: 'command-r-plus' },
+  ],
+  perplexity: [
+    { key: 'apiKey', label: 'API Key', type: 'password', required: true, placeholder: 'pplx-...' },
+    { key: 'model', label: 'Model', type: 'text', required: false, placeholder: 'sonar-pro' },
+  ],
+};
 
 /* ───────── Three.js setup ───────── */
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -1045,7 +1228,7 @@ function handleAssignSubmit(event) {
   const etaMinutes = etaRaw ? Math.max(1, Math.min(240, Number(etaRaw))) : null;
   addTaskToAgent(agent.id, { title, instructions, etaMinutes, mcpIds });
   dom.assignForm.reset();
-  // Reset checkboxes with AI Query checked by default
+  // Reset checkboxes with AI Search checked by default
   renderMcpCheckboxes();
   dom.taskTitle.focus();
 }
@@ -1370,9 +1553,9 @@ function generateMcpSimulatedOutput(adapter, taskLabel) {
       break;
     }
     case 'web': {
-      lines.push('🌐 Web.fetch_url() → fetching content...');
-      lines.push('  200 OK — received 24.3 KB, extracted 1,247 words');
-      lines.push('🌐 Web.extract_text() → OK');
+      lines.push('🤖 AI.search() → querying LLM...');
+      lines.push('  200 OK — received response, extracted 1,247 words');
+      lines.push('🤖 AI.summarize() → OK');
       break;
     }
     case 'atlassian': {
@@ -1494,11 +1677,44 @@ async function generateTaskResult(taskLabel, mcpIds, agentId) {
   return sections.join('\n\n');
 }
 
-/* ───────── ChatGPT API helper ───────── */
-async function askChatGPT(query, agentId) {
+/* ───────── LLM API helper ───────── */
+function getWebAdapterConfig() {
+  const adapter = mcpAdapters.find(a => a.id === 'web');
+  return (adapter && adapter.configValues) || {};
+}
+
+async function askLLM(query, agentId) {
   try {
+    const cv = getWebAdapterConfig();
+    if (IS_TAURI) {
+      const vendorConfig = {};
+      if (cv.llmVendor) {
+        const fields = LLM_VENDOR_FIELDS[cv.llmVendor] || [];
+        for (const f of fields) {
+          if (cv[f.key]) vendorConfig[f.key] = cv[f.key];
+        }
+      }
+      const result = await tauriInvoke('chat_proxy', {
+        request: {
+          prompt: query,
+          agent_id: agentId || null,
+          vendor: cv.llmVendor || null,
+          vendor_config: Object.keys(vendorConfig).length ? vendorConfig : null,
+        },
+      });
+      return '📋 RESULT — ' + result.answer;
+    }
     const payload = { prompt: query };
     if (agentId) payload.agentId = agentId;
+    // Pass vendor config so server can route to the right LLM
+    if (cv.llmVendor) {
+      payload.vendor = cv.llmVendor;
+      payload.vendorConfig = {};
+      const fields = LLM_VENDOR_FIELDS[cv.llmVendor] || [];
+      for (const f of fields) {
+        if (cv[f.key]) payload.vendorConfig[f.key] = cv[f.key];
+      }
+    }
     const resp = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1511,7 +1727,7 @@ async function askChatGPT(query, agentId) {
     const data = await resp.json();
     return '📋 RESULT — ' + data.answer;
   } catch (e) {
-    return '❌ ChatGPT error: ' + e.message;
+    return '❌ LLM error: ' + (e.message || e);
   }
 }
 
@@ -1574,7 +1790,7 @@ async function fetchGitHubReal(cv, label) {
       '  Repos: ' + repos.map(r => r.full_name).join(', ') + '\n' +
       '  Total public repos: ' + (repos.length >= 10 ? '10+' : repos.length);
   } catch (e) {
-    return '❌ GitHub API error: ' + e.message + '\n  Check your token and owner in MCP configuration.';
+    return '❌ GitHub API error: ' + (e.message || e) + '\n  Check your token and owner in MCP configuration.';
   }
 }
 
@@ -1642,7 +1858,7 @@ async function fetchWeatherReal(taskLabel) {
       '  UV Index: ' + uvIndex +
       tomorrowStr;
   } catch (e) {
-    return '❌ Weather fetch error: ' + e.message + '\n  Could not retrieve weather for "' + location + '".';
+    return '❌ Weather fetch error: ' + (e.message || e) + '\n  Could not retrieve weather for "' + location + '".';
   }
 }
 
@@ -1654,47 +1870,72 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
 
     case 'terminal': {
       const shell = cv.shell || 'powershell';
+      const isPosh = shell === 'powershell' || shell === 'pwsh';
+
+      // Map user intent to a real command
+      let cmd;
       if (label.includes('dir') || label.includes('ls') || label.includes('list') || label.includes('directory') || label.includes('folder') || label.includes('file')) {
-        const files = ['index.html', 'app.js', 'style.css', 'package.json', 'README.md', 'tsconfig.json', '.gitignore', 'vite.config.ts', 'LICENSE', 'Dockerfile'];
-        const dirs = ['src/', 'public/', 'node_modules/', 'dist/', 'tests/', '.git/', 'assets/', 'config/'];
-        const pickedFiles = files.sort(() => Math.random() - 0.5).slice(0, 3 + Math.floor(Math.random() * 5));
-        const pickedDirs = dirs.sort(() => Math.random() - 0.5).slice(0, 2 + Math.floor(Math.random() * 3));
-        return '📋 RESULT — Directory listing (' + shell + '):\n' +
-          pickedDirs.map(d => '  📁 ' + d).join('\n') + '\n' +
-          pickedFiles.map(f => '  📄 ' + f + '  ' + (Math.random() * 50).toFixed(1) + ' KB').join('\n') + '\n' +
-          '  Total: ' + pickedDirs.length + ' directories, ' + pickedFiles.length + ' files';
+        cmd = isPosh
+          ? 'Get-ChildItem | Format-Table Mode, LastWriteTime, Length, Name -AutoSize'
+          : 'ls -la';
+      } else if (label.includes('git') || label.includes('status') || label.includes('branch')) {
+        if (label.includes('log') || label.includes('commit') || label.includes('history')) {
+          cmd = 'git log --oneline -10';
+        } else if (label.includes('branch')) {
+          cmd = 'git branch -a';
+        } else {
+          cmd = 'git status';
+        }
+      } else if (label.includes('process') || label.includes('ps') || label.includes('running')) {
+        cmd = isPosh
+          ? 'Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 15 Id, ProcessName, @{N="Memory(MB)";E={[math]::Round($_.WorkingSet64/1MB,1)}} | Format-Table -AutoSize'
+          : 'ps aux --sort=-%mem | head -16';
+      } else if (label.includes('disk') || label.includes('space') || label.includes('storage') || label.includes('drive')) {
+        cmd = isPosh
+          ? 'Get-PSDrive -PSProvider FileSystem | Format-Table Name, @{N="Used(GB)";E={[math]::Round($_.Used/1GB,1)}}, @{N="Free(GB)";E={[math]::Round($_.Free/1GB,1)}} -AutoSize'
+          : 'df -h';
+      } else if (label.includes('env') || label.includes('environment') || label.includes('variable')) {
+        cmd = isPosh
+          ? 'Get-ChildItem Env: | Select-Object -First 20 | Format-Table Name, Value -AutoSize'
+          : 'env | head -20';
+      } else if (label.includes('network') || label.includes('ip') || label.includes('port') || label.includes('connection')) {
+        cmd = isPosh
+          ? 'Get-NetTCPConnection -State Established | Select-Object -First 15 LocalAddress, LocalPort, RemoteAddress, RemotePort | Format-Table -AutoSize'
+          : 'ss -tuln | head -16';
+      } else if (label.includes('uptime') || label.includes('system') || label.includes('info') || label.includes('hostname')) {
+        cmd = isPosh
+          ? '[PSCustomObject]@{Hostname=$env:COMPUTERNAME; OS=(Get-CimInstance Win32_OperatingSystem).Caption; Uptime=((Get-Date)-(Get-CimInstance Win32_OperatingSystem).LastBootUpTime).ToString("d\'d \'hh\:mm\:ss"); CPU=(Get-CimInstance Win32_Processor).Name; RAM=[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,1).ToString()+"GB"} | Format-List'
+          : 'uname -a && uptime';
+      } else {
+        // Generic: run systeminfo summary
+        cmd = isPosh
+          ? 'Write-Output "Hostname: $env:COMPUTERNAME"; Write-Output "User: $env:USERNAME"; Write-Output "OS: $((Get-CimInstance Win32_OperatingSystem).Caption)"; Write-Output "PowerShell: $($PSVersionTable.PSVersion)"; Write-Output "Working Dir: $(Get-Location)"'
+          : 'echo "Host: $(hostname)" && echo "User: $(whoami)" && echo "OS: $(uname -s -r)" && echo "Shell: $SHELL" && echo "PWD: $(pwd)"';
       }
-      if (label.includes('git') || label.includes('status') || label.includes('branch')) {
-        const branches = ['main', 'develop', 'feature/auth-v2', 'fix/memory-leak', 'chore/deps-update'];
-        const picked = branches.sort(() => Math.random() - 0.5).slice(0, 3 + Math.floor(Math.random() * 2));
-        const modified = ['src/app.js', 'package.json', 'README.md', 'src/utils.ts'];
-        const pickedMod = modified.sort(() => Math.random() - 0.5).slice(0, 1 + Math.floor(Math.random() * 3));
-        return '📋 RESULT — Git status:\n' +
-          '  Branch: ' + picked[0] + '\n' +
-          '  Modified files:\n' +
-          pickedMod.map(f => '    M  ' + f).join('\n') + '\n' +
-          '  Branches: ' + picked.join(', ') + '\n' +
-          '  Last commit: ' + ['fix: typo in docs', 'feat: add caching layer', 'chore: update deps', 'refactor: clean up utils'][Math.floor(Math.random() * 4)] + ' (' + (1 + Math.floor(Math.random() * 48)) + 'h ago)';
+
+      try {
+        let result;
+        if (IS_TAURI) {
+          result = await tauriInvoke('terminal_exec', {
+            request: { command: cmd, shell: shell },
+          });
+        } else {
+          const resp = await fetch('/api/terminal', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ command: cmd, shell }),
+          });
+          result = await resp.json();
+          if (result.error) throw new Error(result.error);
+        }
+        const output = (result.stdout || '').trim() || (result.stderr || '').trim() || 'No output';
+        return '📋 RESULT — Terminal (' + shell + ') [LIVE]:\n' +
+          '  $ ' + cmd + '\n' +
+          output.split('\n').map(l => '  ' + l).join('\n') +
+          '\n  Exit code: ' + (result.exit_code || 0);
+      } catch (e) {
+        return '❌ Terminal error: ' + (e.message || e);
       }
-      if (label.includes('process') || label.includes('ps') || label.includes('running')) {
-        const procs = [
-          { name: 'node.exe', pid: 4120 + Math.floor(Math.random() * 1000), mem: '45.2 MB' },
-          { name: 'code.exe', pid: 2000 + Math.floor(Math.random() * 1000), mem: '312.8 MB' },
-          { name: 'chrome.exe', pid: 5000 + Math.floor(Math.random() * 1000), mem: '521.4 MB' },
-          { name: 'powershell.exe', pid: 7000 + Math.floor(Math.random() * 1000), mem: '78.1 MB' },
-          { name: 'explorer.exe', pid: 1200 + Math.floor(Math.random() * 100), mem: '95.6 MB' },
-        ];
-        return '📋 RESULT — Running processes:\n' +
-          '  PID      NAME               MEMORY\n' +
-          procs.map(p => '  ' + String(p.pid).padEnd(9) + p.name.padEnd(19) + p.mem).join('\n') + '\n' +
-          '  Total: ' + (80 + Math.floor(Math.random() * 80)) + ' processes active';
-      }
-      // generic terminal
-      return '📋 RESULT — Command output (' + shell + '):\n' +
-        '  Exit code: 0\n' +
-        '  stdout: Command executed successfully.\n' +
-        '  ' + (1 + Math.floor(Math.random() * 20)) + ' line(s) of output captured.\n' +
-        '  Duration: ' + (0.1 + Math.random() * 3).toFixed(2) + 's';
     }
 
     case 'filesystem': {
@@ -1795,12 +2036,19 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
             reqBody.action = label.includes('search') ? 'search_messages' : 'read_channel';
             reqBody.query = taskLabel;
           }
-          const resp = await fetch('/api/slack', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(reqBody),
-          });
-          const data = await resp.json();
+          let data;
+          if (IS_TAURI) {
+            data = await tauriInvoke('slack_proxy', {
+              request: { action: reqBody.action, channel: reqBody.channel || null, text: reqBody.text || null, query: reqBody.query || null },
+            });
+          } else {
+            const resp = await fetch('/api/slack', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(reqBody),
+            });
+            data = await resp.json();
+          }
           if (data.ok === false && data.error) throw new Error(data.error);
           if (reqBody.action === 'list_channels' && data.channels) {
             return '📋 RESULT — Slack channels (' + ws + ') [LIVE]:\n' +
@@ -1812,7 +2060,7 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
           }
           return '📋 RESULT — Slack [LIVE]:\n  ' + JSON.stringify(data).slice(0, 500);
         } catch (e) {
-          return '❌ Slack API error: ' + e.message;
+          return '❌ Slack API error: ' + (e.message || e);
         }
       }
       // Simulated fallback
@@ -1838,7 +2086,7 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
     }
 
     case 'web': {
-      return await askChatGPT(taskLabel, agentId);
+      return await askLLM(taskLabel, agentId);
     }
 
     case 'atlassian': {
@@ -1871,7 +2119,7 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
           }
           return '📋 RESULT — Atlassian (' + domain + ') [LIVE]:\n  ' + (data.total || 0) + ' total issues';
         } catch (e) {
-          return '❌ Atlassian API error: ' + e.message;
+          return '❌ Atlassian API error: ' + (e.message || e);
         }
       }
       // Simulated fallback
@@ -1930,7 +2178,7 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
           return '📋 RESULT — HubSpot (portal ' + portal + ') [LIVE]:\n' +
             '  Contacts: ' + (data.total || 0);
         } catch (e) {
-          return '❌ HubSpot API error: ' + e.message;
+          return '❌ HubSpot API error: ' + (e.message || e);
         }
       }
       // Simulated fallback
@@ -1967,7 +2215,7 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
         try {
           const awsPrompt = 'You are an AWS CLI expert. The user wants to: "' + taskLabel +
             '" in region ' + region + '. Describe what AWS API calls you would make and provide realistic sample output. Be concise.';
-          return await askChatGPT(awsPrompt, agentId);
+          return await askLLM(awsPrompt, agentId);
         } catch (e) {
           // fall through to simulated
         }
@@ -2008,21 +2256,35 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
       if (cv.apiKey) {
         try {
           if (label.includes('send') || label.includes('notify') || label.includes('alert')) {
-            const resp = await fetch('/api/email', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ apiKey: cv.apiKey, action: 'send_email', from, text: taskLabel }),
-            });
-            const data = await resp.json();
+            let data;
+            if (IS_TAURI) {
+              data = await tauriInvoke('email_proxy', {
+                request: { action: 'send_email', from: from, text: taskLabel, to: null, subject: null, html: null },
+              });
+            } else {
+              const resp = await fetch('/api/email', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ apiKey: cv.apiKey, action: 'send_email', from, text: taskLabel }),
+              });
+              data = await resp.json();
+            }
             return '📋 RESULT — Email [LIVE]:\n  Status: ' + (data.ok ? 'Sent ✓' : 'HTTP ' + data.status) + '\n  From: ' + from;
           }
           if (label.includes('stat') || label.includes('deliverability') || label.includes('report')) {
-            const resp = await fetch('/api/email', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ apiKey: cv.apiKey, action: 'get_stats' }),
-            });
-            const data = await resp.json();
+            let data;
+            if (IS_TAURI) {
+              data = await tauriInvoke('email_proxy', {
+                request: { action: 'get_stats', to: null, from: null, subject: null, html: null, text: null },
+              });
+            } else {
+              const resp = await fetch('/api/email', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ apiKey: cv.apiKey, action: 'get_stats' }),
+              });
+              data = await resp.json();
+            }
             if (Array.isArray(data) && data.length) {
               const s = data[0].stats?.[0]?.metrics || {};
               return '📋 RESULT — Email Stats [LIVE]:\n' +
@@ -2031,7 +2293,7 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
             return '📋 RESULT — Email Stats [LIVE]:\n  ' + JSON.stringify(data).slice(0, 400);
           }
         } catch (e) {
-          return '❌ Email API error: ' + e.message;
+          return '❌ Email API error: ' + (e.message || e);
         }
       }
       // Simulated fallback
@@ -2079,7 +2341,7 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
           }
           return '📋 RESULT — Calendar [LIVE]:\n  No more events today';
         } catch (e) {
-          return '❌ Calendar API error: ' + e.message;
+          return '❌ Calendar API error: ' + (e.message || e);
         }
       }
       // Simulated fallback
@@ -2124,7 +2386,7 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
                 ' ' + (m.name || 'Unnamed') + '  (' + (m.overall_state || '?') + ')').join('\n');
           }
         } catch (e) {
-          return '❌ Datadog API error: ' + e.message;
+          return '❌ Datadog API error: ' + (e.message || e);
         }
       }
       // Simulated fallback
@@ -2175,7 +2437,7 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
             containers.slice(0, 6).map(c => '  🐳 ' + (c.Names?.[0] || '?').replace(/^\//, '').padEnd(20) +
               (c.Image || '?').padEnd(24) + (c.State || '?')).join('\n');
         } catch (e) {
-          return '❌ Docker/K8s API error: ' + e.message;
+          return '❌ Docker/K8s API error: ' + (e.message || e);
         }
       }
       // Simulated fallback
@@ -2242,7 +2504,7 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
           const data = await resp.json();
           return '📋 RESULT — Notion [LIVE]:\n  ' + (data.results?.length || 0) + ' items found in workspace';
         } catch (e) {
-          return '❌ Notion API error: ' + e.message;
+          return '❌ Notion API error: ' + (e.message || e);
         }
       }
       // Try live Linear API if configured
@@ -2261,7 +2523,7 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
               issues.map(i => '  ' + i.identifier + '  ' + i.title + '  (' + (i.state?.name || '?') + ', @' + (i.assignee?.name || 'unassigned') + ')').join('\n');
           }
         } catch (e) {
-          return '❌ Linear API error: ' + e.message;
+          return '❌ Linear API error: ' + (e.message || e);
         }
       }
       // Simulated fallback
@@ -2303,7 +2565,7 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
               results.map((r, i) => '  ' + (i + 1) + '. ' + r.title + '\n     ' + r.url + '\n     ' + (r.description || '').slice(0, 120)).join('\n');
           }
         } catch (e) {
-          return '❌ Brave Search error: ' + e.message;
+          return '❌ Brave Search error: ' + (e.message || e);
         }
       }
       // Try live Tavily API if configured
@@ -2322,7 +2584,7 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
               results.map((r, i) => '  ' + (i + 1) + '. ' + r.title + '\n     ' + r.url + '\n     ' + (r.content || '').slice(0, 120)).join('\n');
           }
         } catch (e) {
-          return '❌ Tavily Search error: ' + e.message;
+          return '❌ Tavily Search error: ' + (e.message || e);
         }
       }
       // Simulated fallback
@@ -2346,12 +2608,19 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
           if (label.includes('payment') || label.includes('charge') || label.includes('transaction')) action = 'list_payments';
           else if (label.includes('subscription') || label.includes('recurring') || label.includes('mrr')) action = 'list_subscriptions';
           else if (label.includes('customer')) action = 'list_customers';
-          const resp = await fetch('/api/stripe', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ secretKey: cv.secretKey, action, limit: 5 }),
-          });
-          const data = await resp.json();
+          let data;
+          if (IS_TAURI) {
+            data = await tauriInvoke('stripe_proxy', {
+              request: { action, limit: 5 },
+            });
+          } else {
+            const resp = await fetch('/api/stripe', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ secretKey: cv.secretKey, action, limit: 5 }),
+            });
+            data = await resp.json();
+          }
           if (data.error) throw new Error(typeof data.error === 'string' ? data.error : data.error.message || 'Unknown');
           if (action === 'list_payments' && data.data) {
             return '📋 RESULT — Stripe Payments [LIVE]:\n' +
@@ -2368,7 +2637,7 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
           }
           return '📋 RESULT — Stripe [LIVE]:\n  ' + JSON.stringify(data).slice(0, 400);
         } catch (e) {
-          return '❌ Stripe API error: ' + e.message;
+          return '❌ Stripe API error: ' + (e.message || e);
         }
       }
       // Simulated fallback
@@ -2403,7 +2672,7 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
         try {
           const analyticsPrompt = 'You are a ' + provider + ' analytics expert. The user asks: "' + taskLabel +
             '". Provide realistic analytics data as if querying ' + provider + '. Include metrics, funnels, or retention data as appropriate. Be concise with numbers.';
-          return await askChatGPT(analyticsPrompt, agentId);
+          return await askLLM(analyticsPrompt, agentId);
         } catch (e) {
           // fall through to simulated
         }
@@ -2443,24 +2712,31 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
       // Try live OpenClaw Gateway via server-side proxy
       if (cv.gatewayUrl) {
         try {
-          const resp = await fetch('/api/openclaw', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              gatewayUrl: cv.gatewayUrl,
-              authToken: cv.authToken || '',
-              sessionId: session,
-              message: taskLabel,
-            }),
-          });
-          const data = await resp.json();
+          let data;
+          if (IS_TAURI) {
+            data = await tauriInvoke('openclaw_proxy', {
+              request: { session_id: session, message: taskLabel },
+            });
+          } else {
+            const resp = await fetch('/api/openclaw', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                gatewayUrl: cv.gatewayUrl,
+                authToken: cv.authToken || '',
+                sessionId: session,
+                message: taskLabel,
+              }),
+            });
+            data = await resp.json();
+          }
           if (data.error) throw new Error(data.error);
           const answer = data.response || data.answer || data.message || JSON.stringify(data).slice(0, 500);
           return '📋 RESULT — OpenClaw Agent (' + gw + ') [LIVE]:\n' +
             '  🦞 Session: ' + session + '\n' +
             '  ' + answer;
         } catch (e) {
-          return '❌ OpenClaw Gateway error: ' + e.message;
+          return '❌ OpenClaw Gateway error: ' + (e.message || e);
         }
       }
       // Simulated fallback
@@ -2524,13 +2800,13 @@ async function generateWebSearchResult(taskLabel) {
       '  Found ' + total + ' results. Top ' + items.length + ':\n\n' +
       results.join('\n\n');
   } catch (e) {
-    return '❌ Web search error: ' + e.message + '\n  Could not retrieve results for "' + truncate(query, 40) + '".';
+    return '❌ Web search error: ' + (e.message || e) + '\n  Could not retrieve results for "' + truncate(query, 40) + '".';
   }
 }
 
 async function generateFallbackResult(label, taskLabel, agentId) {
-  // Always forward fallback queries to ChatGPT via AI Query
-  return await askChatGPT(taskLabel, agentId);
+  // Always forward fallback queries to LLM via AI Search
+  return await askLLM(taskLabel, agentId);
 }
 
 function truncate(str, max) {
@@ -2597,19 +2873,24 @@ function handleKeyNavigation(event) {
 function renderMcpCheckboxes() {
   dom.mcpCheckboxes.innerHTML = '';
   mcpAdapters.forEach((adapter) => {
+    const configured = isMcpConfigured(adapter);
     const label = document.createElement('label');
-    label.className = 'mcp-checkbox-label';
+    label.className = 'mcp-checkbox-label' + (configured ? '' : ' mcp-disabled');
+    label.title = configured ? adapter.name : adapter.name + ' — not configured';
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
     checkbox.value = adapter.id;
     checkbox.name = 'mcpAdapter';
 
-    // AI Query is checked by default
-    if (adapter.id === 'web') {
+    if (!configured) {
+      checkbox.disabled = true;
+      checkbox.checked = false;
+    } else if (adapter.id === 'web') {
+      // AI Search is checked by default when configured
       checkbox.checked = true;
     }
 
-    // When any adapter is toggled, update AI Query state
+    // When any adapter is toggled, update AI Search state
     checkbox.addEventListener('change', () => {
       updateAiQueryState();
     });
@@ -2628,15 +2909,23 @@ function renderMcpCheckboxes() {
 function updateAiQueryState() {
   const checkboxes = dom.mcpCheckboxes.querySelectorAll('input[type="checkbox"]');
   const aiQueryCb = Array.from(checkboxes).find(cb => cb.value === 'web');
-  if (!aiQueryCb) return;
-  const othersChecked = Array.from(checkboxes).some(cb => cb.value !== 'web' && cb.checked);
-  // Uncheck AI Query when another adapter is selected, check it when none are
+  if (!aiQueryCb || aiQueryCb.disabled) return;
+  const othersChecked = Array.from(checkboxes).some(cb => cb.value !== 'web' && !cb.disabled && cb.checked);
+  // Uncheck AI Search when another adapter is selected, check it when none are
   aiQueryCb.checked = !othersChecked;
 }
 
 function isMcpConfigured(adapter) {
   const fields = adapter.configFields || [];
   const vals = adapter.configValues || {};
+  // AI Search adapter: always considered configured (server-side OPENAI_API_KEY fallback)
+  // but vendor-specific fields are validated when a vendor is explicitly selected
+  if (adapter.id === 'web') {
+    if (!vals.llmVendor) return true; // no vendor selected = use server-side default
+    const vendorFields = LLM_VENDOR_FIELDS[vals.llmVendor] || [];
+    const required = vendorFields.filter((f) => f.required);
+    return required.every((f) => vals[f.key] && String(vals[f.key]).trim().length > 0);
+  }
   const required = fields.filter((f) => f.required);
   if (!required.length) return true; // no required fields = always OK
   return required.every((f) => vals[f.key] && String(vals[f.key]).trim().length > 0);
@@ -2739,6 +3028,16 @@ function renderMcpConfigList() {
     editBtn.addEventListener('click', () => startEditMcp(adapter.id));
     actions.appendChild(editBtn);
 
+    if (ok) {
+      const clearBtn = document.createElement('button');
+      clearBtn.type = 'button';
+      clearBtn.className = 'clear-config-btn';
+      clearBtn.textContent = '✕ Clear';
+      clearBtn.title = 'Clear configuration and disable adapter';
+      clearBtn.addEventListener('click', () => clearMcpConfig(adapter.id));
+      actions.appendChild(clearBtn);
+    }
+
     const deleteBtn = document.createElement('button');
     deleteBtn.type = 'button';
     deleteBtn.className = 'delete-btn';
@@ -2750,6 +3049,40 @@ function renderMcpConfigList() {
     item.appendChild(info);
     item.appendChild(actions);
     dom.mcpConfigList.appendChild(item);
+  });
+}
+
+/* Render dynamic credential fields for a selected LLM vendor */
+function renderVendorFields(container, vendorId, configInputs, existingValues) {
+  // Remove previous vendor field inputs from configInputs
+  for (const fields of Object.values(LLM_VENDOR_FIELDS)) {
+    for (const f of fields) {
+      delete configInputs[f.key];
+    }
+  }
+  container.innerHTML = '';
+  const fields = LLM_VENDOR_FIELDS[vendorId];
+  if (!fields) return;
+
+  fields.forEach((field) => {
+    const fieldWrap = document.createElement('div');
+    fieldWrap.className = 'mcp-edit-field';
+
+    const label = document.createElement('label');
+    label.className = 'mcp-edit-field-label';
+    label.textContent = field.label + (field.required ? ' *' : '');
+
+    const input = document.createElement('input');
+    input.type = field.type || 'text';
+    input.placeholder = field.placeholder || '';
+    input.value = existingValues[field.key] || '';
+    if (field.required) input.required = true;
+    input.autocomplete = 'off';
+
+    fieldWrap.appendChild(label);
+    fieldWrap.appendChild(input);
+    container.appendChild(fieldWrap);
+    configInputs[field.key] = input;
   });
 }
 
@@ -2813,6 +3146,8 @@ function startEditMcp(mcpId) {
   // Per-adapter config fields (the real juice)
   const configFields = adapter.configFields || [];
   const configInputs = {};
+  // Container for dynamic vendor fields (used by AI Search adapter)
+  let vendorFieldsContainer = null;
 
   if (configFields.length) {
     const configHeader = document.createElement('div');
@@ -2828,17 +3163,56 @@ function startEditMcp(mcpId) {
       label.className = 'mcp-edit-field-label';
       label.textContent = field.label + (field.required ? ' *' : '');
 
-      const input = document.createElement('input');
-      input.type = field.type || 'text';
-      input.placeholder = field.placeholder || '';
-      input.value = (adapter.configValues && adapter.configValues[field.key]) || '';
-      if (field.required) input.required = true;
-      input.autocomplete = 'off';
+      if (field.type === 'select' && field.options) {
+        // Render a dropdown
+        const select = document.createElement('select');
+        select.autocomplete = 'off';
+        if (field.required) select.required = true;
+        field.options.forEach((opt) => {
+          const option = document.createElement('option');
+          option.value = opt.value;
+          option.textContent = opt.label;
+          if ((adapter.configValues && adapter.configValues[field.key]) === opt.value) {
+            option.selected = true;
+          }
+          select.appendChild(option);
+        });
 
-      fieldWrap.appendChild(label);
-      fieldWrap.appendChild(input);
-      editRow.appendChild(fieldWrap);
-      configInputs[field.key] = input;
+        // If this is the vendor selector, wire up dynamic fields
+        if (field.key === 'llmVendor') {
+          vendorFieldsContainer = document.createElement('div');
+          vendorFieldsContainer.className = 'mcp-vendor-fields';
+          select.addEventListener('change', () => {
+            renderVendorFields(vendorFieldsContainer, select.value, configInputs, adapter.configValues || {});
+          });
+        }
+
+        fieldWrap.appendChild(label);
+        fieldWrap.appendChild(select);
+        editRow.appendChild(fieldWrap);
+        configInputs[field.key] = select;
+
+        // Render initial vendor fields if a vendor is already selected
+        if (vendorFieldsContainer) {
+          editRow.appendChild(vendorFieldsContainer);
+          const currentVendor = (adapter.configValues && adapter.configValues[field.key]) || '';
+          if (currentVendor) {
+            renderVendorFields(vendorFieldsContainer, currentVendor, configInputs, adapter.configValues || {});
+          }
+        }
+      } else {
+        const input = document.createElement('input');
+        input.type = field.type || 'text';
+        input.placeholder = field.placeholder || '';
+        input.value = (adapter.configValues && adapter.configValues[field.key]) || '';
+        if (field.required) input.required = true;
+        input.autocomplete = 'off';
+
+        fieldWrap.appendChild(label);
+        fieldWrap.appendChild(input);
+        editRow.appendChild(fieldWrap);
+        configInputs[field.key] = input;
+      }
     });
   }
 
@@ -2860,12 +3234,19 @@ function startEditMcp(mcpId) {
     if (!newName) { pushToast('Name cannot be empty.'); return; }
 
     // Validate required config fields
-    for (const field of configFields) {
+    const allFields = [...configFields];
+    // Include dynamic vendor fields for validation
+    const vendorVal = configInputs.llmVendor ? configInputs.llmVendor.value : '';
+    if (vendorVal && LLM_VENDOR_FIELDS[vendorVal]) {
+      allFields.push(...LLM_VENDOR_FIELDS[vendorVal]);
+    }
+    for (const field of allFields) {
       if (field.required) {
-        const val = configInputs[field.key] ? configInputs[field.key].value.trim() : '';
+        const el = configInputs[field.key];
+        const val = el ? (el.value || '').trim() : '';
         if (!val) {
           pushToast(field.label + ' is required.');
-          configInputs[field.key].focus();
+          if (el && el.focus) el.focus();
           return;
         }
       }
@@ -2876,11 +3257,25 @@ function startEditMcp(mcpId) {
     adapter.description = descInput.value.trim();
     adapter.tools = toolsInput.value.split(',').map((t) => t.trim()).filter(Boolean);
 
-    // Save config values
+    // Save config values (static + dynamic vendor fields)
     if (!adapter.configValues) adapter.configValues = {};
-    for (const field of configFields) {
-      const val = configInputs[field.key] ? configInputs[field.key].value.trim() : '';
+    for (const field of allFields) {
+      const el = configInputs[field.key];
+      const val = el ? (el.value || '').trim() : '';
       adapter.configValues[field.key] = val;
+    }
+    // Clear stale vendor fields if vendor changed
+    if (vendorVal) {
+      const currentKeys = new Set((LLM_VENDOR_FIELDS[vendorVal] || []).map(f => f.key));
+      for (const [vId, vFields] of Object.entries(LLM_VENDOR_FIELDS)) {
+        if (vId !== vendorVal) {
+          for (const f of vFields) {
+            if (!currentKeys.has(f.key)) {
+              delete adapter.configValues[f.key];
+            }
+          }
+        }
+      }
     }
 
     saveMcpAdapters();
@@ -2904,9 +3299,20 @@ function removeMcpAdapter(mcpId) {
     return;
   }
   mcpAdapters.splice(idx, 1);
+  vaultDeleteAdapterCreds(mcpId);
   saveMcpAdapters();
   refreshMcpUI();
   pushToast('Removed "' + adapter.name + '".');
+}
+
+function clearMcpConfig(mcpId) {
+  const adapter = mcpAdapters.find((a) => a.id === mcpId);
+  if (!adapter) return;
+  adapter.configValues = {};
+  vaultDeleteAdapterCreds(mcpId);
+  saveMcpAdapters();
+  refreshMcpUI();
+  pushToast('Cleared "' + adapter.name + '" configuration.');
 }
 
 function handleAddMcp(event) {
@@ -2949,7 +3355,12 @@ function refreshMcpUI() {
   renderMcpConfigList();
 }
 
-function init() {
+async function init() {
+  // Load encrypted adapter data before rendering
+  const loaded = await loadMcpAdapters();
+  mcpAdapters.length = 0;
+  loaded.forEach((a) => mcpAdapters.push(a));
+
   renderRoster();
   renderSidebar();
   renderMcpCheckboxes();

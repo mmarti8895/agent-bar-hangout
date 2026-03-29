@@ -1,8 +1,8 @@
 /**
- * Test suite for Web Fetch MCP adapter functions.
+ * Test suite for AI Search MCP adapter functions.
  * Run: node test-web-fetch.mjs
  * 
- * Requires server.js running on localhost:3000 for ChatGPT tests.
+ * Requires server.js running on localhost:3000 for LLM proxy tests.
  */
 
 // ─── Inline copies of the functions under test ───
@@ -89,7 +89,7 @@ function assert(condition, description) {
 // ─── Tests ───
 
 console.log('\n══════════════════════════════════════════════');
-console.log('  Web Fetch MCP Adapter — Test Suite');
+console.log('  AI Search MCP Adapter — Test Suite');
 console.log('══════════════════════════════════════════════\n');
 
 // ── Test 1: extractLocationFromQuery ──
@@ -178,12 +178,99 @@ console.log('  Bare "weather" resolved to: ' + edgeResult.split('\n')[0]);
 const weirdResult = await fetchWeatherReal("What's the weather in 小田原");
 assert(!weirdResult.startsWith('❌') || weirdResult.includes('Weather fetch error'), 'Unicode city name handled gracefully');
 
-// ── Test 5: ChatGPT via /api/chat proxy (requires server.js on port 3000) ──
-console.log('\n── Test 5: askChatGPT via /api/chat proxy ──');
+// ── Test 5: Terminal via /api/terminal (requires server.js on port 3000) ──
+console.log('\n── Test 5: Terminal via /api/terminal ──');
+
+const TERM_URL = 'http://localhost:3000/api/terminal';
+
+async function terminalExec(command, shell = 'powershell') {
+  const resp = await fetch(TERM_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ command, shell }),
+  });
+  return resp.json();
+}
+
+// Check terminal endpoint
+let terminalUp = false;
+try {
+  const ping = await fetch(TERM_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ command: 'echo ping', shell: 'powershell' }),
+  });
+  terminalUp = ping.ok;
+} catch { /* server not running */ }
+
+if (terminalUp) {
+  const termResult = await terminalExec('Write-Output "hello world"');
+  assert(termResult.stdout && termResult.stdout.includes('hello world'), 'Terminal echo returns output');
+  assert(termResult.exit_code === 0, 'Terminal echo exits with code 0');
+  assert(typeof termResult.stderr === 'string', 'Terminal returns stderr field');
+
+  // Test validation: missing command
+  const badResp = await fetch(TERM_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ shell: 'powershell' }),
+  });
+  const badBody = await badResp.json();
+  assert(badResp.status === 400, 'Missing command returns 400');
+  assert(badBody.error && badBody.error.includes('Missing'), 'Missing command error message');
+
+  // Test validation: command too long
+  const longResp = await fetch(TERM_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ command: 'x'.repeat(1001), shell: 'powershell' }),
+  });
+  const longBody = await longResp.json();
+  assert(longResp.status === 400, 'Over-length command returns 400');
+  assert(longBody.error && longBody.error.includes('too long'), 'Over-length command error message');
+} else {
+  console.log('  ⚠ server.js not running on port 3000 — skipping terminal tests');
+  console.log('  Start with: PORT=3000 node server.js');
+}
+
+// ── Test 6: CORS origin validation (requires server.js on port 3000) ──
+console.log('\n── Test 6: CORS origin validation ──');
+
+if (terminalUp) {
+  // Test: localhost origin accepted
+  const corsLocalhost = await fetch(TERM_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Origin': 'http://localhost:3000' },
+    body: JSON.stringify({ command: 'echo cors', shell: 'powershell' }),
+  });
+  assert(corsLocalhost.headers.get('access-control-allow-origin') === 'http://localhost:3000', 'CORS allows localhost origin');
+
+  // Test: tauri.localhost origin accepted
+  const corsTauri = await fetch(TERM_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Origin': 'http://tauri.localhost' },
+    body: JSON.stringify({ command: 'echo tauri', shell: 'powershell' }),
+  });
+  assert(corsTauri.headers.get('access-control-allow-origin') === 'http://tauri.localhost', 'CORS allows tauri.localhost origin');
+
+  // Test: unknown origin rejected
+  const corsEvil = await fetch(TERM_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Origin': 'https://evil.example.com' },
+    body: JSON.stringify({ command: 'echo evil', shell: 'powershell' }),
+  });
+  const evilHeader = corsEvil.headers.get('access-control-allow-origin') || '';
+  assert(evilHeader === '', 'CORS rejects unknown origin');
+} else {
+  console.log('  ⚠ server.js not running on port 3000 — skipping CORS tests');
+}
+
+// ── Test 7: ChatGPT via /api/chat proxy (requires server.js on port 3000) ──
+console.log('\n── Test 7: askLLM via /api/chat proxy ──');
 
 const CHAT_URL = 'http://localhost:3000/api/chat';
 
-async function askChatGPT(query) {
+async function askLLM(query) {
   try {
     const resp = await fetch(CHAT_URL, {
       method: 'POST',
@@ -220,10 +307,10 @@ if (serverUp) {
   ];
 
   for (const t of chatTests) {
-    const result = await askChatGPT(t.query);
+    const result = await askLLM(t.query);
     const isOk = !result.startsWith('❌');
     const hasContent = result.toLowerCase().includes(t.mustContain);
-    assert(isOk, `${t.desc} — ChatGPT responded`);
+    assert(isOk, `${t.desc} — LLM responded`);
     assert(hasContent, `${t.desc} — response contains "${t.mustContain}"`);
     if (!isOk) {
       console.log('    Error: ' + result.substring(0, 200));
@@ -231,13 +318,13 @@ if (serverUp) {
   }
 
   // Sample output
-  const weatherResult = await askChatGPT('What is the weather in Walton, KY?');
-  console.log('\n  Sample ChatGPT output (Walton KY weather):\n' + weatherResult.split('\n').map(l => '    ' + l).join('\n') + '\n');
+  const weatherResult = await askLLM('What is the weather in Walton, KY?');
+  console.log('\n  Sample LLM output (Walton KY weather):\n' + weatherResult.split('\n').map(l => '    ' + l).join('\n') + '\n');
 
   assert(!weatherResult.includes('Dunkirk'), 'Does NOT contain wrong city (Dunkirk)');
   assert(!weatherResult.includes('Tokyo'), 'Does NOT contain wrong city (Tokyo)');
 } else {
-  console.log('  ⚠ server.js not running on port 3000 — skipping ChatGPT tests');
+  console.log('  ⚠ server.js not running on port 3000 — skipping LLM tests');
   console.log('  Start with: PORT=3000 node server.js');
 }
 
