@@ -21,6 +21,24 @@
         <canvas id="barCanvas" role="img" aria-label="3D bar scene with worker agents"></canvas>
         <div id="hoverTooltip" class="hover-tooltip" role="status" aria-live="polite"></div>
       </section>
+      <div class="bar-column-row roster-mcp-row">
+        <section class="panel-block roster-block">
+          <div class="section-head">
+            <h3>Agent roster</h3>
+          </div>
+          <div id="rosterGrid" class="roster-grid" role="listbox" aria-label="Agent roster"></div>
+        </section>
+        <section class="panel-block mcp-panel-block">
+          <div class="section-head">
+            <h3>MCP Adapters</h3>
+            <div class="section-head-right">
+              <span class="eyebrow" id="mcpCount">0 available</span>
+              <button type="button" id="mcpConfigBtn" class="clear-btn" title="Configure MCP Servers">⚙ Configure</button>
+            </div>
+          </div>
+          <div id="mcpAdapterList" class="mcp-adapter-list"></div>
+        </section>
+      </div>
       <div class="bar-column-row">
         <section class="panel-block response-pane-block">
           <div class="section-head">
@@ -109,22 +127,6 @@
           <span class="eyebrow" id="activeSummary">0 tasks</span>
         </div>
         <ul id="taskList" class="task-list" aria-live="polite"></ul>
-      </section>
-      <section class="panel-block mcp-panel-block">
-        <div class="section-head">
-          <h3>MCP Adapters</h3>
-          <div class="section-head-right">
-            <span class="eyebrow" id="mcpCount">0 available</span>
-            <button type="button" id="mcpConfigBtn" class="clear-btn" title="Configure MCP Servers">⚙ Configure</button>
-          </div>
-        </div>
-        <div id="mcpAdapterList" class="mcp-adapter-list"></div>
-      </section>
-      <section class="panel-block roster-block">
-        <div class="section-head">
-          <h3>Agent roster</h3>
-        </div>
-        <div id="rosterGrid" class="roster-grid" role="listbox" aria-label="Agent roster"></div>
       </section>
     </aside>
     <div class="toast-stack" aria-live="assertive" aria-atomic="false"></div>

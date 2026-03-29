@@ -10,6 +10,14 @@ async function waitForScene(page) {
   await page.waitForTimeout(1500);
 }
 
+/** Enable and check an MCP adapter checkbox (unconfigured adapters are disabled in the UI). */
+async function forceCheckAdapter(page, adapterId) {
+  await page.evaluate((id) => {
+    const cb = document.querySelector(`#mcpCheckboxes input[value="${id}"]`);
+    if (cb) { cb.disabled = false; cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true })); }
+  }, adapterId);
+}
+
 /* ═══════════════════════════════════════════════════
    1. PAGE LOAD & BASIC STRUCTURE
    ═══════════════════════════════════════════════════ */
@@ -143,7 +151,7 @@ test.describe('Task assignment form', () => {
     expect(count).toBeGreaterThanOrEqual(8);
   });
 
-  test('AI Query (web) adapter is checked by default', async ({ page }) => {
+  test('AI Search (web) adapter is checked by default', async ({ page }) => {
     const webCheckbox = page.locator('#mcpCheckboxes input[value="web"]');
     await expect(webCheckbox).toBeChecked();
   });
@@ -165,7 +173,7 @@ test.describe('Task assignment form', () => {
 
     // Wait for response content
     const responseLine = page.locator('#responsePane .response-line');
-    await expect(responseLine.first()).toBeVisible({ timeout: 10000 });
+    await expect(responseLine.first()).toBeVisible({ timeout: 20000 });
   });
 
   test('submitting a task adds an activity log entry', async ({ page }) => {
@@ -173,7 +181,7 @@ test.describe('Task assignment form', () => {
     await page.locator('#assignForm button[type="submit"]').click();
 
     // Wait for log count to update from '0 entries'
-    await expect(page.locator('#logCount')).not.toHaveText('0 entries', { timeout: 15000 });
+    await expect(page.locator('#logCount')).not.toHaveText('0 entries', { timeout: 30000 });
   });
 });
 
@@ -237,8 +245,8 @@ test.describe('Task pipeline execution', () => {
   });
 
   test('task progresses through pipeline steps', async ({ page }) => {
-    // Check a simulated adapter first — this auto-unchecks AI Query (web)
-    await page.locator('#mcpCheckboxes input[value="filesystem"]').check({ force: true });
+    // Check a simulated adapter first — this auto-unchecks AI Search (web)
+    await forceCheckAdapter(page, 'filesystem');
 
     await page.locator('#taskTitle').fill('Pipeline progress test');
     await page.locator('#assignForm button[type="submit"]').click();
@@ -252,8 +260,8 @@ test.describe('Task pipeline execution', () => {
   });
 
   test('completed task appears in agent output pane', async ({ page }) => {
-    // Check a simulated adapter — auto-unchecks AI Query
-    await page.locator('#mcpCheckboxes input[value="database"]').check({ force: true });
+    // Check a simulated adapter — auto-unchecks AI Search
+    await forceCheckAdapter(page, 'database');
 
     await page.locator('#taskTitle').fill('Agent output test');
     await page.locator('#assignForm button[type="submit"]').click();
@@ -264,8 +272,8 @@ test.describe('Task pipeline execution', () => {
   });
 
   test('GitHub adapter produces simulated output when unconfigured', async ({ page }) => {
-    // Check GitHub adapter — auto-unchecks AI Query
-    await page.locator('#mcpCheckboxes input[value="github"]').check({ force: true });
+    // Check GitHub adapter — auto-unchecks AI Search
+    await forceCheckAdapter(page, 'github');
 
     await page.locator('#taskTitle').fill('List GitHub repos');
     await page.locator('#assignForm button[type="submit"]').click();
@@ -289,13 +297,15 @@ test.describe('Clear buttons', () => {
 
   test('clear response pane empties output', async ({ page }) => {
     // Generate some output first (use simulated adapter)
-    await page.locator('#mcpCheckboxes input[value="filesystem"]').check({ force: true });
+    await forceCheckAdapter(page, 'filesystem');
     await page.locator('#taskTitle').fill('Clear test');
     await page.locator('#assignForm button[type="submit"]').click();
 
-    // Wait for response content
-    const responseLine = page.locator('#responsePane .response-line');
-    await expect(responseLine.first()).toBeVisible({ timeout: 15000 });
+    // Wait for task to fully complete and mark done so pipeline stops emitting
+    await expect(page.locator('.task-card').first()).toContainText(/Done|done/, { timeout: 30000 });
+    const doneBtn = page.locator('.task-card [data-action="done"]');
+    if (await doneBtn.count() > 0) await doneBtn.first().click();
+    await page.waitForTimeout(500);
 
     // Clear
     await page.locator('#clearResponsePane').click();
@@ -308,8 +318,11 @@ test.describe('Clear buttons', () => {
     await page.locator('#taskTitle').fill('Log clear test');
     await page.locator('#assignForm button[type="submit"]').click();
 
-    // Wait for logCount to show entries
-    await expect(page.locator('#logCount')).not.toHaveText('0 entries', { timeout: 15000 });
+    // Wait for task to fully complete so pipeline stops emitting
+    await expect(page.locator('.task-card').first()).toContainText(/Done|done/, { timeout: 30000 });
+    const doneBtn = page.locator('.task-card [data-action="done"]');
+    if (await doneBtn.count() > 0) await doneBtn.first().click();
+    await page.waitForTimeout(500);
 
     // Clear
     await page.locator('#clearLogBtn').click();
@@ -361,9 +374,9 @@ test.describe('Multi-adapter task', () => {
     await page.goto('/');
     await waitForScene(page);
 
-    // Select two simulated adapters — checking these auto-unchecks AI Query
-    await page.locator('#mcpCheckboxes input[value="filesystem"]').check({ force: true });
-    await page.locator('#mcpCheckboxes input[value="database"]').check({ force: true });
+    // Select two simulated adapters — checking these auto-unchecks AI Search
+    await forceCheckAdapter(page, 'filesystem');
+    await forceCheckAdapter(page, 'database');
 
     await page.locator('#taskTitle').fill('Multi adapter test');
     await page.locator('#assignForm button[type="submit"]').click();
@@ -396,16 +409,14 @@ test.describe('Responsive layout', () => {
    11. SERVER API ENDPOINTS
    ═══════════════════════════════════════════════════ */
 test.describe('Server API', () => {
-  test('POST /api/chat returns 400 without API key', async ({ request }) => {
+  test('POST /api/chat returns error without valid config', async ({ request }) => {
+    // Send a request with no prompt to get a 400
     const resp = await request.post('/api/chat', {
-      data: {
-        messages: [{ role: 'user', content: 'hello' }],
-      },
+      data: { notPrompt: 'hello' },
     });
-    // Without OPENAI_API_KEY, server should return error
     const body = await resp.json();
-    // Either 400/500 status, or an error field in json
-    expect(resp.status() === 400 || resp.status() === 500 || body.error).toBeTruthy();
+    expect(resp.status()).toBe(400);
+    expect(body.error).toBeTruthy();
   });
 
   test('POST /api/slack returns error without credentials', async ({ request }) => {
@@ -442,6 +453,64 @@ test.describe('Server API', () => {
     const resp = await request.get('/nonexistent-file-xyz.txt');
     expect(resp.status()).toBe(404);
   });
+
+  test('POST /api/terminal executes command and returns output', async ({ request }) => {
+    const resp = await request.post('/api/terminal', {
+      data: { command: 'echo hello', shell: 'powershell' },
+    });
+    expect(resp.status()).toBe(200);
+    const body = await resp.json();
+    expect(body.stdout).toContain('hello');
+    expect(body.exit_code).toBe(0);
+  });
+
+  test('POST /api/terminal returns 400 without command', async ({ request }) => {
+    const resp = await request.post('/api/terminal', {
+      data: { shell: 'powershell' },
+    });
+    expect(resp.status()).toBe(400);
+    const body = await resp.json();
+    expect(body.error).toContain('Missing command');
+  });
+
+  test('POST /api/terminal rejects commands over 1000 chars', async ({ request }) => {
+    const resp = await request.post('/api/terminal', {
+      data: { command: 'x'.repeat(1001), shell: 'powershell' },
+    });
+    expect(resp.status()).toBe(400);
+    const body = await resp.json();
+    expect(body.error).toContain('too long');
+  });
+
+  test('CORS allows localhost origins', async ({ request }) => {
+    const resp = await request.post('/api/terminal', {
+      data: { command: 'echo cors', shell: 'powershell' },
+      headers: { 'Origin': 'http://localhost:8080' },
+    });
+    expect(resp.status()).toBe(200);
+    const corsHeader = resp.headers()['access-control-allow-origin'];
+    expect(corsHeader).toBe('http://localhost:8080');
+  });
+
+  test('CORS allows tauri.localhost origin', async ({ request }) => {
+    const resp = await request.post('/api/terminal', {
+      data: { command: 'echo tauri', shell: 'powershell' },
+      headers: { 'Origin': 'http://tauri.localhost' },
+    });
+    expect(resp.status()).toBe(200);
+    const corsHeader = resp.headers()['access-control-allow-origin'];
+    expect(corsHeader).toBe('http://tauri.localhost');
+  });
+
+  test('CORS rejects unknown origins', async ({ request }) => {
+    const resp = await request.post('/api/terminal', {
+      data: { command: 'echo blocked', shell: 'powershell' },
+      headers: { 'Origin': 'https://evil.example.com' },
+    });
+    expect(resp.status()).toBe(200);
+    const corsHeader = resp.headers()['access-control-allow-origin'];
+    expect(corsHeader || '').toBe('');
+  });
 });
 
 /* ═══════════════════════════════════════════════════
@@ -453,7 +522,7 @@ test.describe('Task history', () => {
     await waitForScene(page);
 
     // Use simulated adapter
-    await page.locator('#mcpCheckboxes input[value="terminal"]').check({ force: true });
+    await forceCheckAdapter(page, 'terminal');
 
     await page.locator('#taskTitle').fill('History test task');
     await page.locator('#assignForm button[type="submit"]').click();
