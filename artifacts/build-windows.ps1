@@ -65,14 +65,7 @@ if (-not (Test-Path $BuildsDir)) { New-Item -ItemType Directory -Path $BuildsDir
 
 $BundleDir = Join-Path $RepoRoot "src-tauri\target\release\bundle"
 
-# MSI installer
-$MsiFiles = Get-ChildItem -Path (Join-Path $BundleDir "msi") -Filter "*.msi" -ErrorAction SilentlyContinue
-foreach ($f in $MsiFiles) {
-    Copy-Item $f.FullName -Destination $BuildsDir -Force
-    Write-Host "  Copied: $($f.Name)"
-}
-
-# NSIS installer
+# NSIS installer (MSI dropped — WiX Warning 1946 with AppUserModel.ID)
 $NsisFiles = Get-ChildItem -Path (Join-Path $BundleDir "nsis") -Filter "*.exe" -ErrorAction SilentlyContinue
 foreach ($f in $NsisFiles) {
     Copy-Item $f.FullName -Destination $BuildsDir -Force

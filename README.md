@@ -120,7 +120,7 @@ Platform-specific build scripts are in the `artifacts/` folder. Each script inst
 
 | Platform | Script | Output |
 |----------|--------|--------|
-| **Windows** | `./artifacts/build-windows.ps1` | `.msi` installer, `.exe` NSIS setup |
+| **Windows** | `./artifacts/build-windows.ps1` | `.exe` NSIS setup installer |
 | **Linux** | `./artifacts/build-linux.sh` | `.deb`, `.rpm`, `.AppImage` |
 | **macOS** | `./artifacts/build-macos.sh` | `.dmg`, `.app.tar.gz` |
 
@@ -143,7 +143,7 @@ After building, run the app using the installer or standalone executable from `a
 
 | Platform | How to Run |
 |----------|-----------|
-| **Windows** | Run `Agent Bar Hangout_0.1.0_x64-setup.exe` (NSIS installer) or `Agent Bar Hangout_0.1.0_x64_en-US.msi` (MSI installer) to install, then launch from the Start Menu. Alternatively, run `agent-bar-hangout.exe` directly (standalone, no install needed). |
+| **Windows** | Run `Agent Bar Hangout_0.1.0_x64-setup.exe` (NSIS installer) to install, then launch from the Start Menu. Or run `agent-bar-hangout.exe` directly (standalone, no install needed). |
 | **Linux** | Install via `sudo dpkg -i *.deb` or `sudo rpm -i *.rpm`, then launch from your app menu. Or run the `.AppImage` directly: `chmod +x *.AppImage && ./*.AppImage` |
 | **macOS** | Open the `.dmg`, drag the app to Applications, and launch from the Dock/Spotlight. Or extract the `.app.tar.gz` and run the `.app` bundle directly. |
 
