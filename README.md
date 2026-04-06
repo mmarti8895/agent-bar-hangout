@@ -8,6 +8,8 @@ A typical-themed 3D bar where AI "worker agents" hang out waiting for task assig
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 
+![Agent Bar Hangout Screenshot](docs/AgentBarHangout.png)
+
 ---
 
 ## Features
@@ -100,10 +102,12 @@ cd agent-bar-hangout
 ```
 
 ### 2. Create a `.env` file (optional)
-For default OpenAI LLM — other vendors can be configured in-app:
+Copy the example environment file and fill in your values:
+```bash
+cp .env.example .env        # Linux / macOS
+Copy-Item .env.example .env # PowerShell
 ```
-OPENAI_API_KEY=your-openai-api-key-here
-```
+Then edit `.env` and set any keys you need (e.g. `OPENAI_API_KEY`). See [`.env.example`](.env.example) for all available options. Other LLM vendors can be configured at runtime in the MCP Configuration modal.
 
 ### Desktop App (Tauri)
 ```bash

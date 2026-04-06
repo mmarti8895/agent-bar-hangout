@@ -6,8 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build",
+    "tauri:dev": "node scripts/ensure-cargo.js tauri dev",
+    "tauri:build": "node scripts/ensure-cargo.js tauri build",
     "test": "npx playwright test",
     "test:headed": "npx playwright test --headed",
     "test:ui": "npx playwright test --ui"
