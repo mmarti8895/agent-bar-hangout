@@ -254,6 +254,43 @@ Running 59 tests using 2 workers
 Results: 52 passed, 0 failed
 ```
 
+### Developer Notes
+
+- Install dependencies and enable husky pre-commit hooks:
+
+```bash
+npm ci
+# prepare script will run husky install automatically
+```
+
+- If you want pre-commit hooks to run linting before commits, install the developer toolchain for linting (ESLint) and lint-staged as needed. The repository includes a `prepare` script that will set up `husky`.
+
+- Run unit tests (fast):
+
+```bash
+node test-web-fetch.mjs
+```
+
+- Run Playwright integration tests (headless):
+
+```bash
+npx playwright install --with-deps
+npx playwright test
+```
+
+- Health endpoint (dev server):
+
+```bash
+# After starting server (PORT defaults to 8080)
+curl http://localhost:8080/health
+# Returns JSON with uptime and memory store key count
+```
+
+- Devcontainer: a `.devcontainer` is provided for reproducible dev environments (includes Node 18 + Rust). Open the folder in VS Code and choose "Reopen in Container".
+
+- CI: A GitHub Actions workflow is included at `.github/workflows/ci.yml` that runs unit tests and Playwright E2E on pushes and PRs.
+
+
 | # | Suite | Tests | Covers |
 |---|-------|------:|--------|
 | 1 | Page load | 4 | Title, sections, roster, canvas rendering |
