@@ -711,6 +711,21 @@ const server = createServer((req, res) => {
     return;
   }
 
+  // Health endpoint
+  if (req.method === 'GET' && req.url === '/health') {
+    (async () => {
+      try {
+        const store = await loadMemoryStore();
+        const memKeys = Object.keys(store || {}).length;
+        const uptime = process.uptime();
+        jsonResponse(res, 200, { ok: true, uptime_seconds: Math.floor(uptime), memory_keys: memKeys });
+      } catch (e) {
+        jsonResponse(res, 500, { ok: false, error: e.message });
+      }
+    })();
+    return;
+  }
+
   serveStatic(req, res);
 });
 

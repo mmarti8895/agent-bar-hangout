@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, add-mcp-servers ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: Install dependencies
+        run: npm ci
+      - name: Run unit tests
+        run: node test-web-fetch.mjs
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps
+      - name: Run Playwright E2E
+        run: npx playwright test --reporter=list
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: |
+            test-results/**
+            playwright-report/**
