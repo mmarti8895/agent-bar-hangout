@@ -1,0 +1,40 @@
+{
+  "hermes_tasks": [
+    {
+      "id": "hermes-1",
+      "title": "Check inventory",
+      "instructions": "Count bottles on shelf A",
+      "etaMinutes": 15,
+      "assignee": "Nova",
+      "metadata": {
+        "priority": "high"
+      },
+      "receivedAt": "2026-04-09T01:22:23.084Z"
+    },
+    {
+      "id": "hermes-1",
+      "title": "Check inventory",
+      "instructions": "Count bottles on shelf A",
+      "etaMinutes": 15,
+      "assignee": "Nova",
+      "metadata": {
+        "priority": "high"
+      },
+      "receivedAt": "2026-04-09T01:22:53.309Z"
+    },
+    {
+      "id": "hermes-1",
+      "title": "Check inventory",
+      "instructions": "Count bottles on shelf A",
+      "etaMinutes": 15,
+      "assignee": "Nova",
+      "metadata": {
+        "priority": "high"
+      },
+      "receivedAt": "2026-04-09T01:54:50.561Z"
+    }
+  ],
+  "testKey": {
+    "x": 1
+  }
+}
