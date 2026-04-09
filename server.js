@@ -10,7 +10,7 @@
  */
 
 import { createServer } from 'node:http';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, stat, writeFile, rename, access } from 'node:fs/promises';
 import { join, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -89,6 +89,84 @@ function clearAgentContextServer(agentId) {
 }
 
 const MAX_BODY_BYTES = 1024 * 1024; // 1 MB limit for POST bodies
+
+/* ───── Simple persistent memory store (memories.json) ───── */
+const MEMORY_FILE = join(__dirname, 'memories.json');
+async function loadMemoryStore() {
+  try {
+    const raw = await readFile(MEMORY_FILE, 'utf-8');
+    return JSON.parse(raw || '{}');
+  } catch (e) {
+    return {};
+  }
+}
+
+async function saveMemoryStore(store) {
+  // Atomic write: write to temp file then rename
+  const tmp = MEMORY_FILE + '.tmp';
+  const payload = JSON.stringify(store, null, 2);
+  await writeFile(tmp, payload, 'utf-8');
+  await rename(tmp, MEMORY_FILE);
+}
+
+async function handleMemoryGet(req, res) {
+  try {
+    const body = await readBody(req);
+    const key = body.key || null;
+    const store = await loadMemoryStore();
+    if (key == null) return jsonResponse(res, 200, { store });
+    return jsonResponse(res, 200, { value: store[key] });
+  } catch (e) {
+    return jsonResponse(res, 500, { error: e.message });
+  }
+}
+
+async function handleMemorySet(req, res) {
+  try {
+    const { key, value } = await readBody(req);
+    if (!key) return jsonResponse(res, 400, { error: 'Missing key' });
+    if (typeof key !== 'string') return jsonResponse(res, 400, { error: 'Key must be a string' });
+    if (key.length > 256) return jsonResponse(res, 400, { error: 'Key length exceeds 256 characters' });
+    const serialized = JSON.stringify(value === undefined ? null : value);
+    if (serialized.length > 200 * 1024) return jsonResponse(res, 400, { error: 'Value too large (max 200KB)' });
+    const store = await loadMemoryStore();
+    store[key] = value;
+    await saveMemoryStore(store);
+    return jsonResponse(res, 200, { ok: true });
+  } catch (e) {
+    return jsonResponse(res, 500, { error: e.message });
+  }
+}
+
+/* ───── Hermes compatibility endpoint (basic) ───── */
+// Accepts a generic Hermes-style assignment payload and converts to internal task shape.
+async function handleHermesAssign(req, res) {
+  try {
+    const body = await readBody(req);
+    // Support multiple possible Hermes shapes; normalize conservatively
+    const hermes = body || {};
+    // Common fields mapping
+    const task = {
+      id: hermes.taskId || hermes.id || (hermes.task && hermes.task.id) || `t_${Date.now()}`,
+      title: hermes.title || (hermes.task && hermes.task.title) || hermes.summary || 'Hermes Task',
+      instructions: hermes.instructions || (hermes.task && hermes.task.instructions) || hermes.description || '',
+      etaMinutes: hermes.etaMinutes || (hermes.task && hermes.task.eta) || hermes.eta || null,
+      assignee: hermes.targetAgent || hermes.assignee || (hermes.task && hermes.task.assignee) || null,
+      metadata: hermes.metadata || hermes.meta || {},
+      receivedAt: new Date().toISOString(),
+    };
+
+    // Persist into memory under `hermes_tasks`
+    const store = await loadMemoryStore();
+    store.hermes_tasks = store.hermes_tasks || [];
+    store.hermes_tasks.push(task);
+    await saveMemoryStore(store);
+
+    return jsonResponse(res, 200, { ok: true, task });
+  } catch (e) {
+    return jsonResponse(res, 500, { error: e.message });
+  }
+}
 
 /* ───── LLM proxy (multi-vendor) ───── */
 async function handleChatProxy(req, res) {
@@ -585,6 +663,21 @@ const server = createServer((req, res) => {
 
   if (req.method === 'POST' && req.url === '/api/chat') {
     handleChatProxy(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/memory/get') {
+    handleMemoryGet(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/memory/set') {
+    handleMemorySet(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/hermes/assign') {
+    handleHermesAssign(req, res);
     return;
   }
 

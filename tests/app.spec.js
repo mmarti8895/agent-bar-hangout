@@ -540,3 +540,344 @@ test.describe('Task history', () => {
     await expect(page.locator('#historyList')).toContainText('History test task', { timeout: 5000 });
   });
 });
+
+/* ═══════════════════════════════════════════════════
+   13. AGENT WALK ANIMATIONS (leave / return / sip)
+   ═══════════════════════════════════════════════════ */
+
+/** Read an agent's walkState, walkProgress, and beerMesh.visible from JS state. */
+async function getWalkInfo(page, agentId) {
+  return page.evaluate((id) => {
+    const agent = window.__agentBarState.agents.find((a) => a.id === id);
+    return {
+      walkState: agent.walkState,
+      walkProgress: agent.walkProgress,
+      beerVisible: agent.beerMesh ? agent.beerMesh.visible : null,
+      status: agent.status,
+    };
+  }, agentId);
+}
+
+/** Fast-forward the walk animation to completion by setting walkProgress to 1 and running frames. */
+async function fastForwardWalk(page, agentId) {
+  await page.evaluate((id) => {
+    const agent = window.__agentBarState.agents.find((a) => a.id === id);
+    agent.walkProgress = 0.99;
+  }, agentId);
+  // Let one animation frame tick to transition
+  await page.waitForTimeout(100);
+}
+
+/** Fast-forward the sip animation by setting sipTimer far in the past. */
+async function fastForwardSip(page, agentId) {
+  await page.evaluate((id) => {
+    const agent = window.__agentBarState.agents.find((a) => a.id === id);
+    agent.sipTimer = -10;
+  }, agentId);
+  await page.waitForTimeout(100);
+}
+
+/** Poll until an agent's walkState reaches the expected value. */
+async function waitForWalkState(page, agentId, expectedState, timeoutMs = 30000) {
+  await expect(async () => {
+    const info = await getWalkInfo(page, agentId);
+    expect(info.walkState).toBe(expectedState);
+  }).toPass({ timeout: timeoutMs });
+}
+
+test.describe('Agent walk animations', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await waitForScene(page);
+  });
+
+  test('assigning a task sets walkState to leaving and hides beer mug', async ({ page }) => {
+    // Nova starts at-bar
+    const before = await getWalkInfo(page, 'nova');
+    expect(before.walkState).toBe('at-bar');
+    expect(before.beerVisible).toBe(false);
+
+    await page.locator('#taskTitle').fill('Walk test');
+    await page.locator('#assignForm button[type="submit"]').click();
+    await page.waitForTimeout(100);
+
+    const after = await getWalkInfo(page, 'nova');
+    expect(after.walkState).toBe('leaving');
+    expect(after.walkProgress).toBeGreaterThanOrEqual(0);
+    expect(after.beerVisible).toBe(false);
+    expect(after.status).toBe('busy');
+  });
+
+  test('leaving animation transitions to away when progress reaches 1', async ({ page }) => {
+    await page.locator('#taskTitle').fill('Leave complete test');
+    await page.locator('#assignForm button[type="submit"]').click();
+    await page.waitForTimeout(50);
+
+    // Fast-forward animation
+    await fastForwardWalk(page, 'nova');
+
+    const info = await getWalkInfo(page, 'nova');
+    expect(info.walkState).toBe('away');
+    expect(info.walkProgress).toBe(0);
+  });
+
+  test('agent mesh moves away from bar during leaving animation', async ({ page }) => {
+    const posBefore = await page.evaluate(() => {
+      const agent = window.__agentBarState.agents.find((a) => a.id === 'nova');
+      return { z: agent.mesh.position.z, rotY: agent.mesh.rotation.y };
+    });
+
+    await page.locator('#taskTitle').fill('Position test');
+    await page.locator('#assignForm button[type="submit"]').click();
+
+    // Let a few frames run
+    await page.waitForTimeout(300);
+
+    const posAfter = await page.evaluate(() => {
+      const agent = window.__agentBarState.agents.find((a) => a.id === 'nova');
+      return { z: agent.mesh.position.z, rotY: agent.mesh.rotation.y };
+    });
+
+    // Agent should have moved away (larger z) and rotated
+    expect(posAfter.z).toBeGreaterThan(posBefore.z);
+    expect(Math.abs(posAfter.rotY)).toBeGreaterThan(0);
+  });
+
+  test('away agent stays at offset position with hunched animation', async ({ page }) => {
+    await page.locator('#taskTitle').fill('Away pos test');
+    await page.locator('#assignForm button[type="submit"]').click();
+    await page.waitForTimeout(50);
+    await fastForwardWalk(page, 'nova');
+
+    const info = await page.evaluate(() => {
+      const agent = window.__agentBarState.agents.find((a) => a.id === 'nova');
+      return {
+        z: agent.mesh.position.z,
+        origZ: agent.position.z,
+        rotY: agent.mesh.rotation.y,
+      };
+    });
+
+    // Should be at offset position
+    expect(info.z).toBeCloseTo(info.origZ + 3.5, 0);
+    // Turned around
+    expect(info.rotY).toBeCloseTo(Math.PI, 1);
+  });
+
+  test('finishing task triggers returning animation', async ({ page }) => {
+    await forceCheckAdapter(page, 'terminal');
+    await page.locator('#taskTitle').fill('Return test');
+    await page.locator('#assignForm button[type="submit"]').click();
+    await page.waitForTimeout(50);
+    await fastForwardWalk(page, 'nova');
+
+    expect((await getWalkInfo(page, 'nova')).walkState).toBe('away');
+
+    // Wait for finishTask to trigger returning walkState
+    await waitForWalkState(page, 'nova', 'returning');
+
+    const info = await getWalkInfo(page, 'nova');
+    expect(info.walkState).toBe('returning');
+    expect(info.walkProgress).toBeGreaterThanOrEqual(0);
+  });
+
+  test('returning animation transitions to sipping with beer visible', async ({ page }) => {
+    await forceCheckAdapter(page, 'terminal');
+    await page.locator('#taskTitle').fill('Sip transition test');
+    await page.locator('#assignForm button[type="submit"]').click();
+    await page.waitForTimeout(50);
+    await fastForwardWalk(page, 'nova');
+
+    // Wait for task finish to trigger returning
+    await waitForWalkState(page, 'nova', 'returning');
+
+    // Fast-forward the return walk
+    await fastForwardWalk(page, 'nova');
+
+    const info = await getWalkInfo(page, 'nova');
+    expect(info.walkState).toBe('sipping');
+    expect(info.beerVisible).toBe(true);
+  });
+
+  test('sipping animation ends and returns to at-bar with beer hidden', async ({ page }) => {
+    await forceCheckAdapter(page, 'terminal');
+    await page.locator('#taskTitle').fill('Sip end test');
+    await page.locator('#assignForm button[type="submit"]').click();
+    await page.waitForTimeout(50);
+    await fastForwardWalk(page, 'nova');
+
+    await waitForWalkState(page, 'nova', 'returning');
+    await fastForwardWalk(page, 'nova');
+
+    expect((await getWalkInfo(page, 'nova')).walkState).toBe('sipping');
+
+    // Fast-forward sip
+    await fastForwardSip(page, 'nova');
+
+    const info = await getWalkInfo(page, 'nova');
+    expect(info.walkState).toBe('at-bar');
+    expect(info.beerVisible).toBe(false);
+  });
+
+  test('agent mesh returns to original position after full cycle', async ({ page }) => {
+    const origPos = await page.evaluate(() => {
+      const agent = window.__agentBarState.agents.find((a) => a.id === 'nova');
+      return { x: agent.position.x, z: agent.position.z };
+    });
+
+    await forceCheckAdapter(page, 'terminal');
+    await page.locator('#taskTitle').fill('Full cycle test');
+    await page.locator('#assignForm button[type="submit"]').click();
+    await page.waitForTimeout(50);
+    await fastForwardWalk(page, 'nova');
+
+    await waitForWalkState(page, 'nova', 'returning');
+    await fastForwardWalk(page, 'nova');
+    await fastForwardSip(page, 'nova');
+
+    const finalPos = await page.evaluate(() => {
+      const agent = window.__agentBarState.agents.find((a) => a.id === 'nova');
+      return { x: agent.mesh.position.x, z: agent.mesh.position.z };
+    });
+
+    expect(finalPos.x).toBeCloseTo(origPos.x, 1);
+    expect(finalPos.z).toBeCloseTo(origPos.z, 1);
+  });
+
+  test('second task assigned while away does not reset walkState', async ({ page }) => {
+    await page.locator('#taskTitle').fill('First task');
+    await page.locator('#assignForm button[type="submit"]').click();
+    await page.waitForTimeout(50);
+    await fastForwardWalk(page, 'nova');
+
+    expect((await getWalkInfo(page, 'nova')).walkState).toBe('away');
+
+    // Assign a second task while agent is away
+    await page.locator('#taskTitle').fill('Second task');
+    await page.locator('#assignForm button[type="submit"]').click();
+    await page.waitForTimeout(50);
+
+    // Should stay away, not re-trigger leaving
+    const info = await getWalkInfo(page, 'nova');
+    expect(info.walkState).toBe('away');
+  });
+
+  test('task assigned during sipping interrupts to leaving', async ({ page }) => {
+    await forceCheckAdapter(page, 'terminal');
+    await page.locator('#taskTitle').fill('Interrupted sip task');
+    await page.locator('#assignForm button[type="submit"]').click();
+    await page.waitForTimeout(50);
+    await fastForwardWalk(page, 'nova');
+
+    await waitForWalkState(page, 'nova', 'returning');
+    await fastForwardWalk(page, 'nova');
+
+    expect((await getWalkInfo(page, 'nova')).walkState).toBe('sipping');
+    expect((await getWalkInfo(page, 'nova')).beerVisible).toBe(true);
+
+    // Assign new task while sipping — should interrupt to leaving
+    await page.locator('#taskTitle').fill('Interrupt sip');
+    await page.locator('#assignForm button[type="submit"]').click();
+    await page.waitForTimeout(100);
+
+    const info = await getWalkInfo(page, 'nova');
+    expect(info.walkState).toBe('leaving');
+    expect(info.beerVisible).toBe(false);
+  });
+
+  test('markTaskDone triggers returning when no tasks remain', async ({ page }) => {
+    await page.locator('#taskTitle').fill('Manual done test');
+    await page.locator('#assignForm button[type="submit"]').click();
+    await page.waitForTimeout(50);
+    await fastForwardWalk(page, 'nova');
+
+    expect((await getWalkInfo(page, 'nova')).walkState).toBe('away');
+
+    // Manually mark task done via button
+    const doneBtn = page.locator('.task-card [data-action="done"]');
+    await expect(doneBtn.first()).toBeVisible({ timeout: 5000 });
+    await doneBtn.first().click();
+    await page.waitForTimeout(100);
+
+    const info = await getWalkInfo(page, 'nova');
+    expect(info.walkState).toBe('returning');
+  });
+
+  test('angry leave shows red emissive glow on body', async ({ page }) => {
+    await page.locator('#taskTitle').fill('Angry glow test');
+    await page.locator('#assignForm button[type="submit"]').click();
+
+    await page.waitForTimeout(200);
+
+    const emissiveColor = await page.evaluate(() => {
+      const agent = window.__agentBarState.agents.find((a) => a.id === 'nova');
+      const body = agent.mesh.children[0];
+      return body.material.emissive.getHexString();
+    });
+
+    // Should be red-ish (ff3333 = 'ff3333')
+    expect(emissiveColor).toBe('ff3333');
+  });
+
+  test('leaving agent stomps with visible y-bounce', async ({ page }) => {
+    await page.locator('#taskTitle').fill('Stomp test');
+    await page.locator('#assignForm button[type="submit"]').click();
+
+    // Capture several y-positions over frames to verify bounce
+    const yPositions = await page.evaluate(() => {
+      return new Promise((resolve) => {
+        const agent = window.__agentBarState.agents.find((a) => a.id === 'nova');
+        const samples = [];
+        let count = 0;
+        const id = setInterval(() => {
+          samples.push(agent.mesh.position.y);
+          count++;
+          if (count >= 10) { clearInterval(id); resolve(samples); }
+        }, 30);
+      });
+    });
+
+    const min = Math.min(...yPositions);
+    const max = Math.max(...yPositions);
+    // Should have some variation (stomp effect)
+    expect(max - min).toBeGreaterThan(0.01);
+  });
+
+  test('easeInOutCubic helper produces correct values', async ({ page }) => {
+    const results = await page.evaluate(() => {
+      const fn = window.__easeInOutCubic;
+      return {
+        at0: fn(0),
+        at025: fn(0.25),
+        at05: fn(0.5),
+        at075: fn(0.75),
+        at1: fn(1),
+      };
+    });
+
+    expect(results.at0).toBe(0);
+    expect(results.at05).toBe(0.5);
+    expect(results.at1).toBe(1);
+    // ease-in-out: slow at edges, fast in middle
+    expect(results.at025).toBeLessThan(0.25);
+    expect(results.at075).toBeGreaterThan(0.75);
+  });
+
+  test('non-selected agent can also leave and return independently', async ({ page }) => {
+    // Select Quinn, then assign task to Quinn
+    await page.locator('#rosterGrid button[data-agent-id="quinn"]').click();
+    await page.waitForTimeout(100);
+
+    await forceCheckAdapter(page, 'terminal');
+    await page.locator('#taskTitle').fill('Quinn walks');
+    await page.locator('#assignForm button[type="submit"]').click();
+    await page.waitForTimeout(50);
+
+    const quinnInfo = await getWalkInfo(page, 'quinn');
+    expect(quinnInfo.walkState).toBe('leaving');
+
+    // Nova should remain at-bar
+    const novaInfo = await getWalkInfo(page, 'nova');
+    expect(novaInfo.walkState).toBe('at-bar');
+  });
+});

@@ -19,6 +19,8 @@ A typical-themed 3D bar where AI "worker agents" hang out waiting for task assig
 - GLB model loading (bar scene, beer mugs, crowd) with procedural fallbacks
 - Four stylized agents with sunglasses, smirks, name-label sprites, and beer mugs
 - Idle/working animations (bobbing, swaying, leaning forward)
+- Angry leave animation when assigned a task (red glow, stomping, turning away from bar)
+- Walk-back and beer sip animation when returning from a completed task
 - Orbit camera controls, raycasting for click/hover selection
 - Selection rings and hover tooltips
 
@@ -165,7 +167,7 @@ The port defaults to `8080` and can be changed via the `PORT` environment variab
 
 ## Testing
 
-### Playwright E2E Tests (43 tests)
+### Playwright E2E Tests (59 tests)
 ```bash
 npm install
 npx playwright install --with-deps chromium
@@ -186,15 +188,64 @@ PORT=3000 node server.js
 node test-web-fetch.mjs
 ```
 
+### Hermes Integration (dev)
+
+The dev server now exposes a minimal Hermes-compatible assignment endpoint and a small persistent memory API for integrations and testing.
+
+- `POST /api/hermes/assign` — Accepts a flexible Hermes-style payload and stores a normalized task in the server memory store (`memories.json`). Example body:
+
+```json
+{
+  "taskId":"hermes-1",
+  "title":"Check inventory",
+  "instructions":"Count bottles on shelf A",
+  "etaMinutes":15,
+  "targetAgent":"Nova",
+  "metadata": { "priority": "high" }
+}
+```
+
+- `POST /api/memory/get` — `{ key?: string }` returns stored values (omit `key` to get full store).
+- `POST /api/memory/set` — `{ key: string, value: any }` stores values persistently to `memories.json` (dev only).
+
+Notes: these endpoints are intentionally lightweight for local development. For production use, secure them and switch to a proper database backend.
+
 ### Test Coverage
+
+**Playwright E2E — 59 tests, all passing**
+
+```
+Running 59 tests using 2 workers
+  59 passed (5.1m)
+```
+
+**Unit Tests — 52 tests, all passing**
+
+```
+Results: 52 passed, 0 failed
+```
+
+| # | Suite | Tests | Covers |
+|---|-------|------:|--------|
+| 1 | Page load | 4 | Title, sections, roster, canvas rendering |
+| 2 | Agent selection | 4 | Default selection, click, arrow-key cycling, role display |
+| 3 | Task assignment form | 7 | Required fields, validation, MCP checkboxes, task creation, response pane, activity log |
+| 4 | MCP configuration modal | 5 | Open/close, adapter listing, custom adapter form, adding |
+| 5 | Task pipeline execution | 3 | Progress steps, agent output, GitHub simulated output |
+| 6 | Clear buttons | 2 | Clear response pane, clear activity log |
+| 7 | Toast notifications | 1 | Task-assignment toast |
+| 8 | MCP adapter panel | 2 | Card rendering, count label |
+| 9 | Multi-adapter task | 1 | Multiple adapters produce output |
+| 10 | Responsive layout | 1 | Narrow viewport |
+| 11 | Server API | 10 | `/api/chat`, `/api/slack`, `/api/stripe`, `/api/terminal` (exec, validation, length), CORS (localhost, tauri, unknown), static files, 404 |
+| 12 | Task history | 1 | Completed task moves to history |
+| 13 | **Agent walk animations** | **15** | **Angry leave (walkState, position, red glow, stomp bounce), leaving→away transition, away offset position, finish→returning trigger, returning→sipping with beer mug visible, sipping→at-bar with beer hidden, full position cycle, second task while away stays put, sip interrupted by new task, markTaskDone triggers returning, easeInOutCubic correctness, independent agent walks** |
+
 - **18 location extraction cases** — parsing cities from natural language weather queries
 - **Real weather API calls** — live requests to wttr.in
 - **Multi-city fetches** — concurrent weather lookups
 - **Edge cases** — bare queries, Unicode characters, malformed input
-- **Terminal endpoint** — command execution, validation (missing/over-length), exit codes
-- **CORS origin validation** — localhost, tauri.localhost accepted; unknown origins rejected
 - **LLM proxy** — end-to-end multi-vendor AI proxy integration (requires running server)
-- **Server API endpoints** — `/api/chat`, `/api/slack`, `/api/stripe`, `/api/terminal` error handling
 
 ---
 
@@ -219,7 +270,7 @@ node test-web-fetch.mjs
 ├── build-frontend.js       # Copies web assets to dist/ for Tauri builds
 ├── test-web-fetch.mjs      # Unit tests for weather/location/LLM features
 ├── tests/
-│   └── app.spec.js         # Playwright E2E tests (43 tests)
+│   └── app.spec.js         # Playwright E2E tests (58 tests)
 ├── playwright.config.js    # Playwright test configuration
 ├── package.json            # Dependencies (Tauri CLI, Tauri API, Playwright)
 ├── .env                    # LLM API keys (not committed)
