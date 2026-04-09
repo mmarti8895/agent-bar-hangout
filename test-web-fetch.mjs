@@ -126,6 +126,41 @@ for (const t of locationTests) {
 // ── Test 2: fetchWeatherReal — Walton, KY (real API call) ──
 console.log('\n── Test 2: fetchWeatherReal — "What\'s the weather in Walton, Ky" ──');
 
+// --- Mock wttr.in responses so unit tests do not depend on external network ---
+const _realFetch = (typeof fetch !== 'undefined') ? fetch : undefined;
+function makeMockWttrResponse(location) {
+  const areaName = location || 'Unknown';
+  const cur = {
+    temp_F: '72',
+    temp_C: '22',
+    weatherDesc: [{ value: 'Partly cloudy' }],
+    humidity: '55',
+    windspeedMiles: '10',
+    winddir16Point: 'NE',
+    uvIndex: '3',
+    FeelsLikeF: '71',
+    FeelsLikeC: '21'
+  };
+  const area = { areaName: [{ value: areaName }], region: [{ value: '' }], country: [{ value: '' }] };
+  const tmrw = { maxtempF: '80', mintempF: '60', hourly: [{},{},{},{}, { weatherDesc: [{ value: 'Sunny' }] }] };
+  return { current_condition: [cur], nearest_area: [area], weather: [null, tmrw] };
+}
+
+global.fetch = async (url, opts) => {
+  if (typeof url === 'string' && url.startsWith('https://wttr.in/')) {
+    try {
+      const p = url.substring('https://wttr.in/'.length);
+      const [encLoc] = p.split('?');
+      const loc = decodeURIComponent(encLoc || '');
+      return { ok: true, json: async () => makeMockWttrResponse(loc) };
+    } catch (e) {
+      return { ok: false, status: 500, json: async () => ({}) };
+    }
+  }
+  if (_realFetch) return _realFetch(url, opts);
+  throw new Error('No fetch available');
+};
+
 const waltonResult = await fetchWeatherReal("What's the weather in Walton, Ky");
 console.log('\n  Raw output:\n' + waltonResult.split('\n').map(l => '    ' + l).join('\n') + '\n');
 
