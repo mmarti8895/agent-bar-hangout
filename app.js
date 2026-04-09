@@ -76,11 +76,15 @@ const baseAgents = [
 const state = {
   agents: baseAgents.map((a, i) => ({
     ...a, tasks: [], history: [], status: 'idle', swayOffset: i * 0.8,
-    mesh: null, labelSprite: null, ringMesh: null,
+    mesh: null, labelSprite: null, ringMesh: null, beerMesh: null,
+    walkState: 'at-bar', walkProgress: 0, sipTimer: 0,
   })),
   selectedAgentId: baseAgents[0].id,
   hoveredAgentId: null,
 };
+
+// Expose for E2E testing
+window.__agentBarState = state;
 
 /* ───────── Agent context helpers (server-side engine) ───────── */
 function clearServerContext(agentId) {
@@ -840,6 +844,27 @@ function createAgentMesh(agent) {
   smirk.rotation.z = 0.15;
   group.add(smirk);
 
+  // Beer mug (hidden until sipping)
+  const mugMat = new THREE.MeshPhysicalMaterial({
+    color: 0xdaa520, roughness: 0.3, metalness: 0.6,
+  });
+  const mug = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.13, 8), mugMat);
+  mug.position.set(0.28, 0.85, 0.12);
+  const foamMat = new THREE.MeshStandardMaterial({ color: 0xfff8dc, roughness: 0.8 });
+  const foam = new THREE.Mesh(new THREE.CylinderGeometry(0.048, 0.048, 0.025, 8), foamMat);
+  foam.position.y = 0.07;
+  mug.add(foam);
+  const mugHandle = new THREE.Mesh(
+    new THREE.TorusGeometry(0.035, 0.01, 6, 10, Math.PI),
+    new THREE.MeshStandardMaterial({ color: 0xdaa520, roughness: 0.3, metalness: 0.6 })
+  );
+  mugHandle.rotation.y = Math.PI / 2;
+  mugHandle.position.set(0.06, 0, 0);
+  mug.add(mugHandle);
+  mug.visible = false;
+  group.add(mug);
+  agent.beerMesh = mug;
+
   // Selection ring
   const ringMat = new THREE.MeshBasicMaterial({
     color: 0xffd166, side: THREE.DoubleSide, transparent: true, opacity: 0,
@@ -894,6 +919,15 @@ function roundRect(ctx, x, y, w, h, r) {
 
 state.agents.forEach(createAgentMesh);
 
+/* ───────── Walk-state helpers ───────── */
+function easeInOutCubic(t) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+window.__easeInOutCubic = easeInOutCubic;
+const WALK_SPEED = 0.018;   // progress per frame (~60 fps → ~0.9 s full transition)
+const WALK_AWAY_Z = 3.5;    // distance agents walk away from bar
+const SIP_DURATION = 2.5;   // seconds for sip animation
+
 /* ───────── Animation loop ───────── */
 const clock = new THREE.Clock();
 
@@ -903,36 +937,131 @@ function animate() {
 
   state.agents.forEach((agent) => {
     if (!agent.mesh) return;
-
-    // Working agents hunch forward and bob faster; idle agents sway casually
-    const isWorking = agent.status === 'busy';
-    const bobSpeed = isWorking ? 3.0 : 1.5;
-    const bobAmp = isWorking ? 0.02 : 0.06;
-    const bob = Math.sin(elapsed * bobSpeed + agent.swayOffset) * bobAmp;
-    const sway = isWorking ? 0 : Math.sin(elapsed * 0.8 + agent.swayOffset) * 0.04;
-
-    // Working agents lean forward slightly
-    const targetLean = isWorking ? 0.15 : 0;
-    agent.mesh.rotation.x += (targetLean - agent.mesh.rotation.x) * 0.05;
-
-    agent.mesh.position.y = agent.position.y + bob;
-    agent.mesh.rotation.y = sway;
-
-    // Body opacity/emissive for working state
     const body = agent.mesh.children[0];
-    if (body && body.material) {
-      const targetEmissive = isWorking
-        ? 0.35 + Math.sin(elapsed * 4 + agent.swayOffset) * 0.2
-        : 0.2;
-      body.material.emissiveIntensity += (targetEmissive - body.material.emissiveIntensity) * 0.1;
-    }
-
-    // Selection ring
     const isSelected = agent.id === state.selectedAgentId;
     const isHovered = agent.id === state.hoveredAgentId;
-    const targetOpacity = isSelected ? 0.9 : isHovered ? 0.5 : 0;
+    const isWorking = agent.status === 'busy';
+
+    /* ── Leaving: stomp away angrily ── */
+    if (agent.walkState === 'leaving') {
+      agent.walkProgress = Math.min(agent.walkProgress + WALK_SPEED, 1);
+      const t = easeInOutCubic(agent.walkProgress);
+
+      agent.mesh.position.x = agent.position.x;
+      agent.mesh.position.z = agent.position.z + t * WALK_AWAY_Z;
+      // Angry stomp
+      const stomp = Math.abs(Math.sin(elapsed * 10 + agent.swayOffset)) * 0.09 * (1 - t * 0.3);
+      agent.mesh.position.y = agent.position.y + stomp;
+      // Turn away from bar
+      agent.mesh.rotation.y = t * Math.PI;
+      // Lean forward aggressively
+      agent.mesh.rotation.x = 0.25;
+      // Angry red glow
+      if (body && body.material) {
+        body.material.emissive.set(0xff3333);
+        body.material.emissiveIntensity = 0.6 + Math.sin(elapsed * 6) * 0.15;
+      }
+
+      if (agent.walkProgress >= 1) {
+        agent.walkState = 'away';
+        agent.walkProgress = 0;
+        if (body && body.material) body.material.emissive.set(agent.color);
+      }
+    }
+
+    /* ── Away: working at offset position ── */
+    else if (agent.walkState === 'away') {
+      agent.mesh.position.x = agent.position.x;
+      agent.mesh.position.z = agent.position.z + WALK_AWAY_Z;
+      agent.mesh.rotation.y = Math.PI;
+
+      const bob = Math.sin(elapsed * 3.0 + agent.swayOffset) * 0.02;
+      agent.mesh.position.y = agent.position.y + bob;
+      agent.mesh.rotation.x += (0.15 - agent.mesh.rotation.x) * 0.05;
+
+      if (body && body.material) {
+        const targetEmissive = 0.35 + Math.sin(elapsed * 4 + agent.swayOffset) * 0.2;
+        body.material.emissiveIntensity += (targetEmissive - body.material.emissiveIntensity) * 0.1;
+      }
+    }
+
+    /* ── Returning: walk back to bar ── */
+    else if (agent.walkState === 'returning') {
+      agent.walkProgress = Math.min(agent.walkProgress + WALK_SPEED, 1);
+      const t = easeInOutCubic(agent.walkProgress);
+
+      agent.mesh.position.x = agent.position.x;
+      agent.mesh.position.z = agent.position.z + WALK_AWAY_Z * (1 - t);
+      // Turn back to face camera
+      agent.mesh.rotation.y = Math.PI * (1 - t);
+      // Gentle walk bob
+      const bob = Math.sin(elapsed * 4 + agent.swayOffset) * 0.04;
+      agent.mesh.position.y = agent.position.y + bob;
+      // Straighten up
+      agent.mesh.rotation.x = 0.15 * (1 - t);
+
+      if (body && body.material) {
+        body.material.emissiveIntensity = 0.2;
+      }
+
+      if (agent.walkProgress >= 1) {
+        agent.walkState = 'sipping';
+        agent.walkProgress = 0;
+        agent.sipTimer = elapsed;
+        if (agent.beerMesh) agent.beerMesh.visible = true;
+      }
+    }
+
+    /* ── Sipping: enjoy beer at bar ── */
+    else if (agent.walkState === 'sipping') {
+      agent.mesh.position.x = agent.position.x;
+      agent.mesh.position.z = agent.position.z;
+      agent.mesh.rotation.y = 0;
+
+      const sipElapsed = elapsed - agent.sipTimer;
+      const sipPhase = Math.min(sipElapsed / SIP_DURATION, 1);
+      const sipCurve = Math.sin(sipPhase * Math.PI);
+      agent.mesh.rotation.x = -0.12 * sipCurve;
+
+      const bob = Math.sin(elapsed * 1.5 + agent.swayOffset) * 0.06;
+      agent.mesh.position.y = agent.position.y + bob;
+
+      if (body && body.material) {
+        body.material.emissiveIntensity = 0.25;
+      }
+
+      if (sipElapsed >= SIP_DURATION) {
+        agent.walkState = 'at-bar';
+        agent.mesh.rotation.x = 0;
+        if (agent.beerMesh) agent.beerMesh.visible = false;
+      }
+    }
+
+    /* ── At bar: normal idle / busy ── */
+    else {
+      const bobSpeed = isWorking ? 3.0 : 1.5;
+      const bobAmp = isWorking ? 0.02 : 0.06;
+      const bob = Math.sin(elapsed * bobSpeed + agent.swayOffset) * bobAmp;
+      const sway = isWorking ? 0 : Math.sin(elapsed * 0.8 + agent.swayOffset) * 0.04;
+
+      const targetLean = isWorking ? 0.15 : 0;
+      agent.mesh.rotation.x += (targetLean - agent.mesh.rotation.x) * 0.05;
+
+      agent.mesh.position.y = agent.position.y + bob;
+      agent.mesh.rotation.y = sway;
+
+      if (body && body.material) {
+        const targetEmissive = isWorking
+          ? 0.35 + Math.sin(elapsed * 4 + agent.swayOffset) * 0.2
+          : 0.2;
+        body.material.emissiveIntensity += (targetEmissive - body.material.emissiveIntensity) * 0.1;
+      }
+    }
+
+    // Selection ring (all states)
     const ring = agent.ringMesh;
     if (ring) {
+      const targetOpacity = isSelected ? 0.9 : isHovered ? 0.5 : 0;
       ring.material.opacity += (targetOpacity - ring.material.opacity) * 0.15;
       ring.material.color.set(isSelected ? (isWorking ? 0x22ccff : 0xffd166) : 0xffffff);
       if (isSelected) {
@@ -941,7 +1070,7 @@ function animate() {
       }
     }
 
-    // Sunglasses lens reflection shimmer
+    // Sunglasses lens reflection shimmer (all states)
     const leftLens = agent.mesh.children[3];
     const rightLens = agent.mesh.children[4];
     if (leftLens && leftLens.material && leftLens.material.clearcoat !== undefined) {
@@ -1259,6 +1388,12 @@ function addTaskToAgent(agentId, payload) {
   };
   agent.tasks.push(task);
   agent.status = 'busy';
+  // Trigger angry leave animation only if agent was at the bar
+  if (agent.walkState === 'at-bar' || agent.walkState === 'sipping') {
+    agent.walkState = 'leaving';
+    agent.walkProgress = 0;
+    if (agent.beerMesh) agent.beerMesh.visible = false;
+  }
   renderSidebar();
   const mcpNames = mcpIds.map((id) => {
     const a = mcpAdapters.find((m) => m.id === id);
@@ -2821,6 +2956,11 @@ function finishTask(agent, task) {
   task.completedAt = new Date().toISOString();
   agent.history.unshift(task);
   agent.status = agent.tasks.length ? 'busy' : 'idle';
+  // Trigger walk-back + beer sip animation if no more tasks
+  if (!agent.tasks.length && (agent.walkState === 'away' || agent.walkState === 'leaving')) {
+    agent.walkState = 'returning';
+    agent.walkProgress = 0;
+  }
   renderSidebar();
   pushToast(agent.name + ' finished "' + task.label + '" and is back at the bar! 🍺');
 }
@@ -2835,6 +2975,11 @@ function markTaskDone(agentId, taskId) {
   task.completedAt = new Date().toISOString();
   agent.history.unshift(task);
   agent.status = agent.tasks.length ? 'busy' : 'idle';
+  // Trigger walk-back + beer sip animation if no more tasks
+  if (!agent.tasks.length && (agent.walkState === 'away' || agent.walkState === 'leaving')) {
+    agent.walkState = 'returning';
+    agent.walkProgress = 0;
+  }
   renderSidebar();
   pushToast(agent.name + ' wrapped "' + task.label + '".');
 }
