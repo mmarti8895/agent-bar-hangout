@@ -213,7 +213,7 @@ API Endpoints
 
 - `POST /api/memory/get` — Body: `{ key?: string }`. Returns the stored value for `key`, or the full store when `key` is omitted.
 
-- `POST /api/memory/set` — Body: `{ key: string, value: any }`. Persists `value` under `key` in `memories.json`. To remove a key set its value to `null`.
+- `POST /api/memory/set` — Body: `{ key: string, value: any }`. Persists `value` under `key` in `memories.json`, including `null` values. Setting `value` to `null` keeps the key present with a `null` value; it does not delete the key.
 
 Examples
 - Assign a Hermes task (curl):
