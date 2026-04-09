@@ -51,7 +51,8 @@ paths:
                 key:
                   type: string
                 value:
-                  type: object
+                  nullable: true
+                  description: Arbitrary JSON value to store.
       responses:
         '200':
           description: Key stored
