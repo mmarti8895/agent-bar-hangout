@@ -167,7 +167,7 @@ The port defaults to `8080` and can be changed via the `PORT` environment variab
 
 ## Testing
 
-### Playwright E2E Tests (58 tests)
+### Playwright E2E Tests (59 tests)
 ```bash
 npm install
 npx playwright install --with-deps chromium
@@ -188,13 +188,41 @@ PORT=3000 node server.js
 node test-web-fetch.mjs
 ```
 
+### Hermes Integration (dev)
+
+The dev server now exposes a minimal Hermes-compatible assignment endpoint and a small persistent memory API for integrations and testing.
+
+- `POST /api/hermes/assign` — Accepts a flexible Hermes-style payload and stores a normalized task in the server memory store (`memories.json`). Example body:
+
+```json
+{
+  "taskId":"hermes-1",
+  "title":"Check inventory",
+  "instructions":"Count bottles on shelf A",
+  "etaMinutes":15,
+  "targetAgent":"Nova",
+  "metadata": { "priority": "high" }
+}
+```
+
+- `POST /api/memory/get` — `{ key?: string }` returns stored values (omit `key` to get full store).
+- `POST /api/memory/set` — `{ key: string, value: any }` stores values persistently to `memories.json` (dev only).
+
+Notes: these endpoints are intentionally lightweight for local development. For production use, secure them and switch to a proper database backend.
+
 ### Test Coverage
 
-**Playwright E2E — 58 tests, all passing**
+**Playwright E2E — 59 tests, all passing**
 
 ```
-Running 58 tests using 1 worker
-  58 passed
+Running 59 tests using 2 workers
+  59 passed (5.1m)
+```
+
+**Unit Tests — 52 tests, all passing**
+
+```
+Results: 52 passed, 0 failed
 ```
 
 | # | Suite | Tests | Covers |

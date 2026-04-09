@@ -3541,7 +3541,112 @@ async function init() {
   dom.mcpAddForm.addEventListener('submit', handleAddMcp);
 
   document.addEventListener('keydown', handleKeyNavigation);
+  // Start polling for incoming Hermes tasks (integration compatibility)
+  startHermesPolling();
   animate();
 }
 
 init();
+
+/* ───────── Hermes integration (client-side) ───────── */
+const hermesSeen = new Set();
+function createHermesPanel() {
+  // Lightweight panel inserted above the task list
+  const panel = document.createElement('div');
+  panel.id = 'hermesPanel';
+  panel.className = 'panel hermes-panel';
+  const header = document.createElement('h4');
+  header.textContent = 'Incoming Hermes Tasks';
+  const list = document.createElement('div');
+  list.id = 'hermesList';
+  panel.appendChild(header);
+  panel.appendChild(list);
+  // Insert before the task list in the sidebar
+  if (dom.taskList && dom.taskList.parentNode) dom.taskList.parentNode.insertBefore(panel, dom.taskList);
+  return panel;
+}
+
+const hermesPanelEl = createHermesPanel();
+
+async function fetchHermesTasks() {
+  try {
+    const resp = await fetch('/api/memory/get', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'hermes_tasks' }) });
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    return data.value || [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function renderHermesTask(task) {
+  const list = hermesPanelEl.querySelector('#hermesList');
+  if (!list) return;
+  const el = document.createElement('div');
+  el.className = 'hermes-task';
+  el.dataset.id = task.id;
+  const title = document.createElement('div');
+  title.className = 'hermes-title';
+  title.textContent = task.title;
+  const instr = document.createElement('div');
+  instr.className = 'hermes-instr';
+  instr.textContent = task.instructions || '';
+  const actions = document.createElement('div');
+  actions.className = 'hermes-actions';
+  const accept = document.createElement('button');
+  accept.textContent = 'Accept';
+  accept.addEventListener('click', () => acceptHermes(task));
+  const reject = document.createElement('button');
+  reject.textContent = 'Reject';
+  reject.addEventListener('click', () => rejectHermes(task));
+  actions.appendChild(accept);
+  actions.appendChild(reject);
+  el.appendChild(title);
+  el.appendChild(instr);
+  el.appendChild(actions);
+  list.appendChild(el);
+}
+
+async function acceptHermes(task) {
+  // Map assignee to agent id by name or id; fall back to currently selected agent
+  let agent = state.agents.find(a => (a.id && a.id.toLowerCase()) === (String(task.assignee || '').toLowerCase()) || a.name === task.assignee);
+  if (!agent) agent = state.agents.find(a => a.id === state.selectedAgentId) || state.agents[0];
+  addTaskToAgent(agent.id, { title: task.title, instructions: task.instructions, etaMinutes: task.etaMinutes, mcpIds: [] });
+  await removeHermesTaskFromServer(task.id);
+  const el = hermesPanelEl.querySelector('.hermes-task[data-id="' + task.id + '"]');
+  if (el) el.remove();
+}
+
+async function rejectHermes(task) {
+  await removeHermesTaskFromServer(task.id);
+  const el = hermesPanelEl.querySelector('.hermes-task[data-id="' + task.id + '"]');
+  if (el) el.remove();
+}
+
+async function removeHermesTaskFromServer(id) {
+  try {
+    const getResp = await fetch('/api/memory/get', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'hermes_tasks' }) });
+    if (!getResp.ok) return;
+    const d = await getResp.json();
+    const arr = d.value || [];
+    const filtered = arr.filter(t => t.id !== id);
+    await fetch('/api/memory/set', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'hermes_tasks', value: filtered }) });
+  } catch (e) {
+    // ignore
+  }
+}
+
+async function startHermesPolling() {
+  try {
+    const tasks = await fetchHermesTasks();
+    for (const t of tasks) {
+      if (!t || !t.id) continue;
+      if (hermesSeen.has(t.id)) continue;
+      renderHermesTask(t);
+      hermesSeen.add(t.id);
+    }
+  } catch (e) {
+    // ignore polling errors
+  }
+  setTimeout(startHermesPolling, 5000);
+}
