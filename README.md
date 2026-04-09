@@ -263,7 +263,7 @@ npm ci
 # prepare script will run husky install automatically
 ```
 
-- If you want pre-commit hooks to run linting before commits, install the developer toolchain for linting (ESLint) and lint-staged as needed. The repository includes a `prepare` script that will set up `husky`.
+- Pre-commit hooks are installed automatically by the repository's `prepare` script when you run `npm ci`. Any linting tools used by those hooks should be managed by the project's configuration rather than installed manually on an as-needed basis.
 
 - Run unit tests (fast):
 
