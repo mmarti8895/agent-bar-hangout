@@ -138,6 +138,37 @@ async function handleMemorySet(req, res) {
   }
 }
 
+async function handleMemoryKeys(req, res) {
+  try {
+    const store = await loadMemoryStore();
+    return jsonResponse(res, 200, { keys: Object.keys(store) });
+  } catch (e) {
+    return jsonResponse(res, 500, { error: e.message });
+  }
+}
+
+async function handleMemoryDelete(req, res) {
+  try {
+    const { key } = await readBody(req);
+    if (!key) return jsonResponse(res, 400, { error: 'Missing key' });
+    const store = await loadMemoryStore();
+    if (Object.prototype.hasOwnProperty.call(store, key)) delete store[key];
+    await saveMemoryStore(store);
+    return jsonResponse(res, 200, { ok: true });
+  } catch (e) {
+    return jsonResponse(res, 500, { error: e.message });
+  }
+}
+
+async function handleMemoryClear(req, res) {
+  try {
+    await saveMemoryStore({});
+    return jsonResponse(res, 200, { ok: true });
+  } catch (e) {
+    return jsonResponse(res, 500, { error: e.message });
+  }
+}
+
 /* ───── Hermes compatibility endpoint (basic) ───── */
 // Accepts a generic Hermes-style assignment payload and converts to internal task shape.
 async function handleHermesAssign(req, res) {
@@ -673,6 +704,21 @@ const server = createServer((req, res) => {
 
   if (req.method === 'POST' && req.url === '/api/memory/set') {
     handleMemorySet(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/memory/keys') {
+    handleMemoryKeys(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/memory/delete') {
+    handleMemoryDelete(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/memory/clear') {
+    handleMemoryClear(req, res);
     return;
   }
 
