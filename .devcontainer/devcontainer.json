@@ -1,0 +1,9 @@
+{
+  "name": "Agent Bar Hangout Dev",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:18",
+  "features": {
+    "ghcr.io/devcontainers/features/rust:1": {}
+  },
+  "postCreateCommand": "npm ci || true && rustup --version || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y",
+  "remoteUser": "vscode"
+}
