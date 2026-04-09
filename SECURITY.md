@@ -1,6 +1,6 @@
 # Security Policy
 
-If you discover a security issue, please open a private issue or email the maintainer with details.
+If you discover a security issue, please use GitHub Private Vulnerability Reporting / Security Advisories if it is enabled for this repository, or email the maintainer with details.
 
 For public disclosure, please coordinate via the repo owner.
 
