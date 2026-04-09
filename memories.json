@@ -1,1 +1,21 @@
-{}
+{
+  "hermes_tasks": [
+    {
+      "id": "hermes-1",
+      "title": "Check inventory",
+      "instructions": "Count bottles on shelf A",
+      "etaMinutes": 15,
+      "assignee": "Nova",
+      "metadata": {
+        "priority": "high"
+      },
+      "receivedAt": "2026-04-09T23:42:36.469Z"
+    }
+  ],
+  "testKey": {
+    "x": 1
+  },
+  "edgeKey": {
+    "ok": true
+  }
+}

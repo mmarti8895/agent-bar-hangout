@@ -694,6 +694,7 @@ async function handleTerminalExec(req, res) {
 }
 
 /* ───── Router ───── */
+const connections = new Set();
 const server = createServer((req, res) => {
   // CORS headers for local dev — restrict to same-origin / localhost / Tauri
   const origin = req.headers.origin || '';
@@ -779,6 +780,14 @@ const server = createServer((req, res) => {
     return;
   }
 
+  // Internal shutdown endpoint for test runners to request graceful shutdown
+  if (req.method === 'POST' && req.url === '/__shutdown') {
+    jsonResponse(res, 200, { ok: true });
+    // allow response to flush, then shutdown
+    setImmediate(() => shutdown(0));
+    return;
+  }
+
   // Health endpoint
   if (req.method === 'GET' && req.url === '/health') {
     (async () => {
@@ -797,7 +806,35 @@ const server = createServer((req, res) => {
   serveStatic(req, res);
 });
 
+server.on('connection', (socket) => {
+  connections.add(socket);
+  socket.on('close', () => connections.delete(socket));
+});
+
 server.listen(PORT, () => {
   console.log(`🍺 Agent Bar Hangout server running at http://localhost:${PORT}`);
   console.log(`   OpenAI API key: ${OPENAI_API_KEY ? '✓ loaded' : '✗ missing'}`);
 });
+
+// Graceful shutdown for test runners and signals
+function shutdown(code = 0) {
+  try {
+    // stop accepting new connections
+    server.close(() => process.exit(code));
+
+    // Force-destroy any open sockets to avoid libuv double-close races on Windows
+    for (const s of connections) {
+      try {
+        s.destroy();
+      } catch (e) {}
+    }
+
+    // ensure process exits eventually
+    setTimeout(() => process.exit(code), 5000);
+  } catch (e) {
+    process.exit(code);
+  }
+}
+
+process.on('SIGINT', () => shutdown(0));
+process.on('SIGTERM', () => shutdown(0));

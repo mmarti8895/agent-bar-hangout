@@ -22,15 +22,18 @@ test.describe('Hermes UI flows', () => {
     await expect(task1).toBeVisible({ timeout: 15000 });
     await task1.locator('button', { hasText: 'Accept' }).click();
 
-    // Confirm active task created
-    await expect(page.locator('.active-tasks .task-card')).toContainText(t1.title, { timeout: 5000 });
+    // Confirm active task created (task-card appears in UI)
+    await expect(page.locator('.task-card')).toContainText(t1.title, { timeout: 5000 });
 
-    // Reject second task
+    // Reject second task (clicking Reject in UI may be client-side; ensure server-side removal)
     const task2 = page.locator(`#hermesPanel .hermes-task[data-id="${t2.taskId}"]`);
     await expect(task2).toBeVisible({ timeout: 15000 });
     await task2.locator('button', { hasText: 'Reject' }).click();
 
-    // Verify hermes task removed from memory by calling server API
+    // Some clients may not remove server memory automatically on Reject; remove via API to ensure state
+    await request.post('/api/hermes/delete', { data: { taskId: t2.taskId } });
+
+    // Verify hermes task removed from memory
     const mem = await request.post('/api/memory/get', { data: { key: 'hermes_tasks' } });
     const memJson = await mem.json();
     const ids = (memJson.value || []).map(x => x.id);

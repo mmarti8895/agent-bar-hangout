@@ -39,5 +39,4 @@ async function postJson(path, body) {
   assert(keys.length === 0, 'Memory store is empty after clear');
 
   console.log('\nAll memory integration tests passed.');
-  process.exit(0);
 })();
