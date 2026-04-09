@@ -199,6 +199,23 @@ async function handleHermesAssign(req, res) {
   }
 }
 
+// Delete a Hermes task by id
+async function handleHermesDelete(req, res) {
+  try {
+    const { taskId } = await readBody(req);
+    if (!taskId) return jsonResponse(res, 400, { error: 'Missing taskId' });
+    const store = await loadMemoryStore();
+    if (!Array.isArray(store.hermes_tasks)) return jsonResponse(res, 404, { error: 'No hermes_tasks' });
+    const before = store.hermes_tasks.length;
+    store.hermes_tasks = store.hermes_tasks.filter(t => t.id !== taskId);
+    const after = store.hermes_tasks.length;
+    await saveMemoryStore(store);
+    return jsonResponse(res, 200, { ok: true, removed: before - after });
+  } catch (e) {
+    return jsonResponse(res, 500, { error: e.message });
+  }
+}
+
 /* ───── LLM proxy (multi-vendor) ───── */
 async function handleChatProxy(req, res) {
   let body = '';
@@ -724,6 +741,11 @@ const server = createServer((req, res) => {
 
   if (req.method === 'POST' && req.url === '/api/hermes/assign') {
     handleHermesAssign(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/hermes/delete') {
+    handleHermesDelete(req, res);
     return;
   }
 
