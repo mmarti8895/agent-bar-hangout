@@ -219,7 +219,7 @@ Examples
 - Assign a Hermes task (curl):
 
 ```bash
-curl -X POST http://localhost:3000/api/hermes/assign \
+curl -X POST http://localhost:8080/api/hermes/assign \
   -H 'Content-Type: application/json' \
   -d '{"taskId":"hermes-1","title":"Check inventory","instructions":"Count bottles","targetAgent":"Nova"}'
 ```
