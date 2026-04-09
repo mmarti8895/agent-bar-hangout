@@ -190,25 +190,54 @@ node test-web-fetch.mjs
 
 ### Hermes Integration (dev)
 
-The dev server now exposes a minimal Hermes-compatible assignment endpoint and a small persistent memory API for integrations and testing.
+The dev server exposes a minimal Hermes-compatible assignment endpoint and a small persistent memory API useful for local integrations and testing.
 
-- `POST /api/hermes/assign` — Accepts a flexible Hermes-style payload and stores a normalized task in the server memory store (`memories.json`). Example body:
+Memory store
+- File: `memories.json` at the project root (created on first write).
+- Behavior: writes are atomic (written to a temp file then renamed) to avoid partial/corrupt files during concurrent updates.
+- Intended use: short-lived test state, task queues, and simple integration testing only. Do not rely on this store for production data or concurrent multi-process deployments.
+
+API Endpoints
+- `POST /api/hermes/assign` — Accepts a Hermes-style payload and stores a normalized task object in the memory store. Example body:
 
 ```json
 {
-  "taskId":"hermes-1",
-  "title":"Check inventory",
-  "instructions":"Count bottles on shelf A",
-  "etaMinutes":15,
-  "targetAgent":"Nova",
+  "taskId": "hermes-1",
+  "title": "Check inventory",
+  "instructions": "Count bottles on shelf A",
+  "etaMinutes": 15,
+  "targetAgent": "Nova",
   "metadata": { "priority": "high" }
 }
 ```
 
-- `POST /api/memory/get` — `{ key?: string }` returns stored values (omit `key` to get full store).
-- `POST /api/memory/set` — `{ key: string, value: any }` stores values persistently to `memories.json` (dev only).
+- `POST /api/memory/get` — Body: `{ key?: string }`. Returns the stored value for `key`, or the full store when `key` is omitted.
 
-Notes: these endpoints are intentionally lightweight for local development. For production use, secure them and switch to a proper database backend.
+- `POST /api/memory/set` — Body: `{ key: string, value: any }`. Persists `value` under `key` in `memories.json`. To remove a key set its value to `null`.
+
+Examples
+- Assign a Hermes task (curl):
+
+```bash
+curl -X POST http://localhost:3000/api/hermes/assign \
+  -H 'Content-Type: application/json' \
+  -d '{"taskId":"hermes-1","title":"Check inventory","instructions":"Count bottles","targetAgent":"Nova"}'
+```
+
+- Read memory (JS fetch):
+
+```js
+const res = await fetch('/api/memory/get', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ key: 'hermes_tasks' }) });
+const data = await res.json();
+```
+
+Migration & production guidance
+- This file-backed store is a development convenience. For production use prefer a proper database (Postgres/SQLite) or a durable queue.
+- If you need zero-native-deps local persistence, consider `sql.js` (WebAssembly SQLite) or a managed service. Native `better-sqlite3` may require a compatible build toolchain on CI/Windows.
+
+Security
+- The memory and Hermes endpoints are intentionally unprotected in the dev server. Do not expose the dev server to untrusted networks. Add authentication and authorization before using these endpoints in shared environments.
+
 
 ### Test Coverage
 
