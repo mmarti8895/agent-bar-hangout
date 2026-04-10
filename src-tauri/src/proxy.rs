@@ -67,6 +67,32 @@ fn build_messages(system: &str, ctx: &[ContextEntry], prompt: &str) -> Vec<Value
     msgs
 }
 
+// Choose appropriate token parameter name/value for different vendors.
+fn choose_token_param(vc: &HashMap<String, String>, vendor: &str) -> Option<(String, i64)> {
+    // Vendor-specific overrides take precedence
+    match vendor {
+        "anthropic" => {
+            let v = vc.get("max_tokens_to_sample").and_then(|s| s.parse::<i64>().ok()).unwrap_or(1024);
+            Some(("max_tokens_to_sample".to_string(), v))
+        }
+        "google" => {
+            // Google uses generationConfig.maxOutputTokens, handled in call_gemini
+            None
+        }
+        _ => {
+            // Prefer explicit max_completion_tokens, then legacy max_tokens, fallback to default
+            if let Some(s) = vc.get("max_completion_tokens") {
+                if let Ok(v) = s.parse::<i64>() { return Some(("max_completion_tokens".to_string(), v)); }
+            }
+            if let Some(s) = vc.get("max_tokens") {
+                if let Ok(v) = s.parse::<i64>() { return Some(("max_tokens".to_string(), v)); }
+            }
+            // Default for OpenAI-compatible vendors
+            Some(("max_completion_tokens".to_string(), 1024))
+        }
+    }
+}
+
 fn system_prompt() -> String {
     let today = Utc::now().format("%A, %B %-d, %Y").to_string();
     format!("You are a helpful assistant. Today is {today}. Provide concise, factual answers. For weather, include current conditions, temperature, humidity, wind, and forecast when possible. For searches, provide relevant factual information with sources when applicable. If the user refers to something from a previous answer, use the conversation history to respond accurately.")
@@ -147,7 +173,12 @@ async fn call_openai(
     if let Some(org) = vc.get("orgId").filter(|o| !o.is_empty()) {
         req = req.header("OpenAI-Organization", org.as_str());
     }
-    let body = json!({"model": model, "messages": messages, "max_tokens": 1024, "temperature": 0.7});
+    let mut body = json!({"model": model, "messages": messages, "temperature": 0.7});
+    if let Some((k, v)) = choose_token_param(vc, "openai") {
+        if let Value::Object(ref mut m) = body {
+            m.insert(k, json!(v));
+        }
+    }
     let resp = req.json(&body).send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         let status = resp.status();
@@ -173,7 +204,12 @@ async fn call_anthropic(
     let mut messages: Vec<Value> = ctx.iter().map(|e| json!({"role": &e.role, "content": &e.content})).collect();
     messages.push(json!({"role": "user", "content": prompt}));
     let model = vc.get("model").filter(|m| !m.is_empty()).map(|m| m.as_str()).unwrap_or("claude-sonnet-4-20250514");
-    let body = json!({"model": model, "max_tokens": 1024, "system": sys, "messages": messages});
+    let mut body = json!({"model": model, "system": sys, "messages": messages});
+    if let Some((k, v)) = choose_token_param(vc, "anthropic") {
+        if let Value::Object(ref mut m) = body {
+            m.insert(k, json!(v));
+        }
+    }
     let resp = client
         .post("https://api.anthropic.com/v1/messages")
         .header("x-api-key", &api_key)
@@ -210,10 +246,18 @@ async fn call_gemini(
     }).collect();
     contents.push(json!({"role": "user", "parts": [{"text": prompt}]}));
     let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}", model, api_key);
+    let mut gen_cfg = json!({"maxOutputTokens": 1024, "temperature": 0.7});
+    if let Some(s) = vc.get("max_output_tokens").or_else(|| vc.get("maxOutputTokens")) {
+        if let Ok(v) = s.parse::<i64>() {
+            if let Value::Object(ref mut m) = gen_cfg {
+                m.insert("maxOutputTokens".to_string(), json!(v));
+            }
+        }
+    }
     let body = json!({
         "systemInstruction": {"parts": [{"text": sys}]},
         "contents": contents,
-        "generationConfig": {"maxOutputTokens": 1024, "temperature": 0.7}
+        "generationConfig": gen_cfg
     });
     let resp = client.post(&url).json(&body).send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
@@ -238,7 +282,12 @@ async fn call_xai(
     }
     let messages = build_messages(sys, ctx, prompt);
     let model = vc.get("model").filter(|m| !m.is_empty()).map(|m| m.as_str()).unwrap_or("grok-3");
-    let body = json!({"model": model, "messages": messages, "max_tokens": 1024, "temperature": 0.7});
+    let mut body = json!({"model": model, "messages": messages, "temperature": 0.7});
+    if let Some((k, v)) = choose_token_param(vc, "xai") {
+        if let Value::Object(ref mut m) = body {
+            m.insert(k, json!(v));
+        }
+    }
     let resp = client
         .post("https://api.x.ai/v1/chat/completions")
         .header("Authorization", format!("Bearer {api_key}"))
@@ -266,7 +315,12 @@ async fn call_deepseek(
     }
     let messages = build_messages(sys, ctx, prompt);
     let model = vc.get("model").filter(|m| !m.is_empty()).map(|m| m.as_str()).unwrap_or("deepseek-chat");
-    let body = json!({"model": model, "messages": messages, "max_tokens": 1024, "temperature": 0.7});
+    let mut body = json!({"model": model, "messages": messages, "temperature": 0.7});
+    if let Some((k, v)) = choose_token_param(vc, "deepseek") {
+        if let Value::Object(ref mut m) = body {
+            m.insert(k, json!(v));
+        }
+    }
     let resp = client
         .post("https://api.deepseek.com/chat/completions")
         .header("Authorization", format!("Bearer {api_key}"))
@@ -330,7 +384,12 @@ async fn call_mistral(
     }
     let messages = build_messages(sys, ctx, prompt);
     let model = vc.get("model").filter(|m| !m.is_empty()).map(|m| m.as_str()).unwrap_or("mistral-large-latest");
-    let body = json!({"model": model, "messages": messages, "max_tokens": 1024, "temperature": 0.7});
+    let mut body = json!({"model": model, "messages": messages, "temperature": 0.7});
+    if let Some((k, v)) = choose_token_param(vc, "mistral") {
+        if let Value::Object(ref mut m) = body {
+            m.insert(k, json!(v));
+        }
+    }
     let resp = client
         .post("https://api.mistral.ai/v1/chat/completions")
         .header("Authorization", format!("Bearer {api_key}"))
@@ -390,7 +449,12 @@ async fn call_perplexity(
     }
     let messages = build_messages(sys, ctx, prompt);
     let model = vc.get("model").filter(|m| !m.is_empty()).map(|m| m.as_str()).unwrap_or("sonar-pro");
-    let body = json!({"model": model, "messages": messages, "max_tokens": 1024, "temperature": 0.7});
+    let mut body = json!({"model": model, "messages": messages, "temperature": 0.7});
+    if let Some((k, v)) = choose_token_param(vc, "perplexity") {
+        if let Value::Object(ref mut m) = body {
+            m.insert(k, json!(v));
+        }
+    }
     let resp = client
         .post("https://api.perplexity.ai/chat/completions")
         .header("Authorization", format!("Bearer {api_key}"))

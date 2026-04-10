@@ -55,6 +55,10 @@ body {
   flex-direction: column;
 }
 
+.run-history-block {
+  grid-column: 1 / -1;
+}
+
 .bar-column-row .response-pane {
   flex: 1;
 }

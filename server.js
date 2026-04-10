@@ -138,6 +138,37 @@ async function handleMemorySet(req, res) {
   }
 }
 
+async function handleMemoryKeys(req, res) {
+  try {
+    const store = await loadMemoryStore();
+    return jsonResponse(res, 200, { keys: Object.keys(store) });
+  } catch (e) {
+    return jsonResponse(res, 500, { error: e.message });
+  }
+}
+
+async function handleMemoryDelete(req, res) {
+  try {
+    const { key } = await readBody(req);
+    if (!key) return jsonResponse(res, 400, { error: 'Missing key' });
+    const store = await loadMemoryStore();
+    if (Object.prototype.hasOwnProperty.call(store, key)) delete store[key];
+    await saveMemoryStore(store);
+    return jsonResponse(res, 200, { ok: true });
+  } catch (e) {
+    return jsonResponse(res, 500, { error: e.message });
+  }
+}
+
+async function handleMemoryClear(req, res) {
+  try {
+    await saveMemoryStore({});
+    return jsonResponse(res, 200, { ok: true });
+  } catch (e) {
+    return jsonResponse(res, 500, { error: e.message });
+  }
+}
+
 /* ───── Hermes compatibility endpoint (basic) ───── */
 // Accepts a generic Hermes-style assignment payload and converts to internal task shape.
 async function handleHermesAssign(req, res) {
@@ -163,6 +194,23 @@ async function handleHermesAssign(req, res) {
     await saveMemoryStore(store);
 
     return jsonResponse(res, 200, { ok: true, task });
+  } catch (e) {
+    return jsonResponse(res, 500, { error: e.message });
+  }
+}
+
+// Delete a Hermes task by id
+async function handleHermesDelete(req, res) {
+  try {
+    const { taskId } = await readBody(req);
+    if (!taskId) return jsonResponse(res, 400, { error: 'Missing taskId' });
+    const store = await loadMemoryStore();
+    if (!Array.isArray(store.hermes_tasks)) return jsonResponse(res, 404, { error: 'No hermes_tasks' });
+    const before = store.hermes_tasks.length;
+    store.hermes_tasks = store.hermes_tasks.filter(t => t.id !== taskId);
+    const after = store.hermes_tasks.length;
+    await saveMemoryStore(store);
+    return jsonResponse(res, 200, { ok: true, removed: before - after });
   } catch (e) {
     return jsonResponse(res, 500, { error: e.message });
   }
@@ -274,9 +322,18 @@ async function callOpenAI(systemPrompt, ctx, prompt, vc) {
   const messages = buildMessages(systemPrompt, ctx, prompt);
   const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey };
   if (vc.orgId) headers['OpenAI-Organization'] = vc.orgId;
+
+  // Some newer OpenAI models (and API versions) expect `max_completion_tokens`
+  // instead of `max_tokens`. Use `vc.max_completion_tokens` if provided,
+  // otherwise default to 1024. This avoids 400 errors like:
+  // Unsupported parameter: 'max_tokens' is not supported with this model.
+  const payload = { model: vc.model || 'gpt-4o-mini', messages, temperature: 0.7 };
+  if (vc.max_completion_tokens !== undefined) payload.max_completion_tokens = vc.max_completion_tokens;
+  else payload.max_completion_tokens = 1024;
+
   const resp = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST', headers,
-    body: JSON.stringify({ model: vc.model || 'gpt-4o-mini', messages, max_tokens: 1024, temperature: 0.7 }),
+    body: JSON.stringify(payload),
   });
   if (!resp.ok) throw new Error('OpenAI HTTP ' + resp.status + ': ' + await resp.text());
   const data = await resp.json();
@@ -300,10 +357,11 @@ async function callAnthropic(systemPrompt, ctx, prompt, vc) {
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: vc.model || 'claude-sonnet-4-20250514',
-      max_tokens: 1024,
-      system: systemPrompt,
-      messages,
+        model: vc.model || 'claude-sonnet-4-20250514',
+        // Anthropic uses `max_tokens_to_sample` for sampling limits
+        max_tokens_to_sample: vc.max_tokens_to_sample !== undefined ? vc.max_tokens_to_sample : 1024,
+        system: systemPrompt,
+        messages,
     }),
   });
   if (!resp.ok) throw new Error('Anthropic HTTP ' + resp.status + ': ' + await resp.text());
@@ -345,7 +403,11 @@ async function callXAI(systemPrompt, ctx, prompt, vc) {
   const resp = await fetch('https://api.x.ai/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + vc.apiKey },
-    body: JSON.stringify({ model: vc.model || 'grok-3', messages, max_tokens: 1024, temperature: 0.7 }),
+    body: JSON.stringify((() => {
+      const p = { model: vc.model || 'grok-3', messages, temperature: 0.7 };
+      p.max_completion_tokens = vc.max_completion_tokens !== undefined ? vc.max_completion_tokens : 1024;
+      return p;
+    })()),
   });
   if (!resp.ok) throw new Error('xAI HTTP ' + resp.status + ': ' + await resp.text());
   const data = await resp.json();
@@ -359,7 +421,11 @@ async function callDeepSeek(systemPrompt, ctx, prompt, vc) {
   const resp = await fetch('https://api.deepseek.com/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + vc.apiKey },
-    body: JSON.stringify({ model: vc.model || 'deepseek-chat', messages, max_tokens: 1024, temperature: 0.7 }),
+    body: JSON.stringify((() => {
+      const p = { model: vc.model || 'deepseek-chat', messages, temperature: 0.7 };
+      p.max_completion_tokens = vc.max_completion_tokens !== undefined ? vc.max_completion_tokens : 1024;
+      return p;
+    })()),
   });
   if (!resp.ok) throw new Error('DeepSeek HTTP ' + resp.status + ': ' + await resp.text());
   const data = await resp.json();
@@ -398,7 +464,11 @@ async function callMistral(systemPrompt, ctx, prompt, vc) {
   const resp = await fetch('https://api.mistral.ai/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + vc.apiKey },
-    body: JSON.stringify({ model: vc.model || 'mistral-large-latest', messages, max_tokens: 1024, temperature: 0.7 }),
+    body: JSON.stringify((() => {
+      const p = { model: vc.model || 'mistral-large-latest', messages, temperature: 0.7 };
+      p.max_completion_tokens = vc.max_completion_tokens !== undefined ? vc.max_completion_tokens : 1024;
+      return p;
+    })()),
   });
   if (!resp.ok) throw new Error('Mistral HTTP ' + resp.status + ': ' + await resp.text());
   const data = await resp.json();
@@ -436,7 +506,11 @@ async function callPerplexity(systemPrompt, ctx, prompt, vc) {
   const resp = await fetch('https://api.perplexity.ai/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + vc.apiKey },
-    body: JSON.stringify({ model: vc.model || 'sonar-pro', messages, max_tokens: 1024, temperature: 0.7 }),
+    body: JSON.stringify((() => {
+      const p = { model: vc.model || 'sonar-pro', messages, temperature: 0.7 };
+      p.max_completion_tokens = vc.max_completion_tokens !== undefined ? vc.max_completion_tokens : 1024;
+      return p;
+    })()),
   });
   if (!resp.ok) throw new Error('Perplexity HTTP ' + resp.status + ': ' + await resp.text());
   const data = await resp.json();
@@ -646,6 +720,7 @@ async function handleTerminalExec(req, res) {
 }
 
 /* ───── Router ───── */
+const connections = new Set();
 const server = createServer((req, res) => {
   // CORS headers for local dev — restrict to same-origin / localhost / Tauri
   const origin = req.headers.origin || '';
@@ -676,8 +751,28 @@ const server = createServer((req, res) => {
     return;
   }
 
+  if (req.method === 'POST' && req.url === '/api/memory/keys') {
+    handleMemoryKeys(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/memory/delete') {
+    handleMemoryDelete(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/memory/clear') {
+    handleMemoryClear(req, res);
+    return;
+  }
+
   if (req.method === 'POST' && req.url === '/api/hermes/assign') {
     handleHermesAssign(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/hermes/delete') {
+    handleHermesDelete(req, res);
     return;
   }
 
@@ -711,6 +806,14 @@ const server = createServer((req, res) => {
     return;
   }
 
+  // Internal shutdown endpoint for test runners to request graceful shutdown
+  if (req.method === 'POST' && req.url === '/__shutdown') {
+    jsonResponse(res, 200, { ok: true });
+    // allow response to flush, then shutdown
+    setImmediate(() => shutdown(0));
+    return;
+  }
+
   // Health endpoint
   if (req.method === 'GET' && req.url === '/health') {
     (async () => {
@@ -729,7 +832,35 @@ const server = createServer((req, res) => {
   serveStatic(req, res);
 });
 
+server.on('connection', (socket) => {
+  connections.add(socket);
+  socket.on('close', () => connections.delete(socket));
+});
+
 server.listen(PORT, () => {
   console.log(`🍺 Agent Bar Hangout server running at http://localhost:${PORT}`);
   console.log(`   OpenAI API key: ${OPENAI_API_KEY ? '✓ loaded' : '✗ missing'}`);
 });
+
+// Graceful shutdown for test runners and signals
+function shutdown(code = 0) {
+  try {
+    // stop accepting new connections
+    server.close(() => process.exit(code));
+
+    // Force-destroy any open sockets to avoid libuv double-close races on Windows
+    for (const s of connections) {
+      try {
+        s.destroy();
+      } catch (e) {}
+    }
+
+    // ensure process exits eventually
+    setTimeout(() => process.exit(code), 5000);
+  } catch (e) {
+    process.exit(code);
+  }
+}
+
+process.on('SIGINT', () => shutdown(0));
+process.on('SIGTERM', () => shutdown(0));

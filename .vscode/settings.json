@@ -3,6 +3,10 @@
         "/^node -c app\\.js$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^Get-NetTCPConnection$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

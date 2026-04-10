@@ -40,18 +40,15 @@
         </section>
       </div>
       <div class="bar-column-row">
-        <section class="panel-block response-pane-block">
+        <section class="panel-block run-history-block">
           <div class="section-head">
-            <h3>Work Output</h3>
-            <button type="button" id="clearResponsePane" class="clear-btn" title="Clear output">Clear</button>
+            <h3>Run History</h3>
+            <div class="section-head-right">
+              <button type="button" id="clearRunHistory" class="clear-btn" title="Clear run history">Clear</button>
+              <button type="button" id="downloadRunHistory" class="clear-btn" title="Download last 10 runs as JSON">Download JSON</button>
+            </div>
           </div>
-          <div id="responsePane" class="response-pane" aria-live="polite" aria-label="Agent work output"></div>
-        </section>
-        <section class="panel-block history-block">
-          <div class="section-head">
-            <h3>History</h3>
-          </div>
-          <ul id="historyList" class="task-list history"></ul>
+          <ul id="historyList" class="task-list history" aria-live="polite" aria-label="Recent agent runs"></ul>
         </section>
       </div>
       <section class="panel-block agent-output-block">

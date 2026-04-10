@@ -17,6 +17,8 @@ const dom = {
   taskEta: document.getElementById('taskEta'),
   taskList: document.getElementById('taskList'),
   historyList: document.getElementById('historyList'),
+  downloadRunHistory: document.getElementById('downloadRunHistory'),
+  clearRunHistory: document.getElementById('clearRunHistory'),
   selectedName: document.getElementById('selectedAgentName'),
   selectedRole: document.getElementById('selectedAgentRole'),
   selectedMood: document.getElementById('selectedAgentMood'),
@@ -48,6 +50,10 @@ const dom = {
   mcpNewConfigFields: document.getElementById('mcpNewConfigFields'),
 };
 const stageElement = document.querySelector('.bar-stage');
+
+const RUN_HISTORY_STORAGE_KEY = 'agentBarHangout_runHistory';
+const RUN_HISTORY_LIMIT = 10;
+const RUN_HISTORY_FIELD_MAX_LEN = 500;
 
 /* ───────── Agent definitions ───────── */
 const baseAgents = [
@@ -82,6 +88,8 @@ const state = {
   selectedAgentId: baseAgents[0].id,
   hoveredAgentId: null,
 };
+
+let runHistory = [];
 
 // Expose for E2E testing
 window.__agentBarState = state;
@@ -146,6 +154,14 @@ const defaultMcpAdapters = [
       },
     ],
     // Dynamic fields rendered per vendor — see LLM_VENDOR_FIELDS below
+    configValues: {},
+  },
+  {
+    id: 'weather', name: 'Weather', icon: '🌦️',
+    description: 'Live current weather and short forecast via wttr.in',
+    tools: ['get_weather', 'compare_locations', 'summarize_forecast'],
+    isDefault: true,
+    configFields: [],
     configValues: {},
   },
   {
@@ -370,20 +386,22 @@ async function decryptData(raw) {
 /* ───────── Tauri vault helpers ───────── */
 async function vaultStoreAdapterCreds(adapterId, configValues) {
   if (!IS_TAURI) return;
-  await tauriInvoke('vault_store', { key: 'adapter_' + adapterId, value: JSON.stringify(configValues) });
+  // Pass adapter_id and credentials object to match Tauri command signature
+  await tauriInvoke('vault_store', { adapter_id: adapterId, credentials: configValues });
 }
 
 async function vaultGetAdapterCreds(adapterId) {
   if (!IS_TAURI) return null;
   try {
-    const raw = await tauriInvoke('vault_get', { key: 'adapter_' + adapterId });
-    return JSON.parse(raw);
+    // Tauri vault_get returns a JSON object (HashMap) when credentials exist
+    const creds = await tauriInvoke('vault_get', { adapter_id: adapterId });
+    return creds || null;
   } catch { return null; }
 }
 
 async function vaultDeleteAdapterCreds(adapterId) {
   if (!IS_TAURI) return;
-  await tauriInvoke('vault_delete', { key: 'adapter_' + adapterId }).catch(() => {});
+  await tauriInvoke('vault_delete', { adapter_id: adapterId }).catch(() => {});
 }
 
 async function loadMcpAdapters() {
@@ -1176,7 +1194,7 @@ function renderSidebar() {
     dom.selectedMood.textContent = 'Mood —';
     dom.selectedStatus.textContent = 'Status —';
     renderTaskList(dom.taskList, [], 'Select an agent to assign work.', true);
-    renderTaskList(dom.historyList, [], 'No history yet.', false);
+    renderRunHistory();
     dom.activeSummary.textContent = '0 tasks';
     return;
   }
@@ -1186,8 +1204,145 @@ function renderSidebar() {
   const statusLabel = agent.tasks.length ? 'Busy' : 'Idle';
   dom.selectedStatus.textContent = 'Status ' + statusLabel;
   renderTaskList(dom.taskList, agent.tasks, 'No active tasks.', true);
-  renderTaskList(dom.historyList, agent.history, 'No completed tasks yet.', false);
+  renderRunHistory();
   dom.activeSummary.textContent = agent.tasks.length ? agent.tasks.length + ' task(s)' : 'No active tasks';
+}
+
+function loadRunHistory() {
+  try {
+    const raw = localStorage.getItem(RUN_HISTORY_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const trimmed = parsed.slice(0, RUN_HISTORY_LIMIT);
+    if (trimmed.length !== parsed.length) {
+      localStorage.setItem(RUN_HISTORY_STORAGE_KEY, JSON.stringify(trimmed));
+    }
+    return trimmed;
+  } catch {
+    return [];
+  }
+}
+
+function saveRunHistory() {
+  const trimmedHistory = runHistory.slice(0, RUN_HISTORY_LIMIT);
+  try {
+    localStorage.setItem(RUN_HISTORY_STORAGE_KEY, JSON.stringify(trimmedHistory));
+  } catch {
+    // Ignore storage write failures so task completion can proceed.
+  }
+}
+
+function formatDownloadTimestamp(date) {
+  const pad = (value) => String(value).padStart(2, '0');
+  return date.getFullYear() +
+    pad(date.getMonth() + 1) +
+    pad(date.getDate()) + '_' +
+    pad(date.getHours()) +
+    pad(date.getMinutes()) +
+    pad(date.getSeconds());
+}
+
+function renderRunHistory() {
+  if (!dom.historyList) return;
+  dom.historyList.innerHTML = '';
+  if (!runHistory.length) {
+    const emptyItem = document.createElement('li');
+    emptyItem.className = 'empty';
+    emptyItem.textContent = 'No recent runs yet.';
+    dom.historyList.appendChild(emptyItem);
+    return;
+  }
+
+  runHistory.forEach((run) => {
+    const item = document.createElement('li');
+    item.className = 'task-card';
+
+    const meta = document.createElement('div');
+    meta.className = 'task-meta';
+
+    const title = document.createElement('strong');
+    title.textContent = run.agentName + ' — ' + run.label;
+
+    const details = document.createElement('span');
+    details.className = 'subtle';
+    const toolsText = run.mcpNames && run.mcpNames.length ? ' • ' + run.mcpNames.join(', ') : '';
+    details.textContent = (run.instructions || 'No instructions') + toolsText;
+
+    const stamp = document.createElement('span');
+    stamp.className = 'eyebrow';
+    const completedAt = run.completedAt;
+    const hasValidCompletedAt = completedAt instanceof Date
+      ? !Number.isNaN(completedAt.getTime())
+      : !!completedAt && !Number.isNaN(new Date(completedAt).getTime());
+    stamp.textContent = hasValidCompletedAt
+      ? 'Run completed ' + formatIsoTime(completedAt)
+      : 'Run completed —';
+
+    meta.appendChild(title);
+    meta.appendChild(details);
+    meta.appendChild(stamp);
+
+    item.appendChild(meta);
+    dom.historyList.appendChild(item);
+  });
+}
+
+function buildRunRecord(agent, task) {
+  const mcpNames = (task.mcpIds || []).map((id) => {
+    const adapter = mcpAdapters.find((m) => m.id === id);
+    return adapter ? adapter.name : id;
+  });
+  const resultEntry = [...(task.log || [])].reverse().find((entry) => entry.type === 'result');
+  const rawInstructions = task.instructions || '';
+  const rawResult = resultEntry ? resultEntry.message : '';
+  return {
+    id: task.id,
+    agentId: agent.id,
+    agentName: agent.name,
+    label: task.label,
+    instructions: rawInstructions.length > RUN_HISTORY_FIELD_MAX_LEN
+      ? rawInstructions.slice(0, RUN_HISTORY_FIELD_MAX_LEN) + '…'
+      : rawInstructions,
+    mcpIds: [...(task.mcpIds || [])],
+    mcpNames,
+    etaMinutes: task.etaMinutes || null,
+    createdAt: task.createdAt,
+    completedAt: task.completedAt,
+    result: rawResult.length > RUN_HISTORY_FIELD_MAX_LEN
+      ? rawResult.slice(0, RUN_HISTORY_FIELD_MAX_LEN) + '…'
+      : rawResult,
+    // log is intentionally omitted to avoid persisting potentially sensitive tool outputs
+  };
+}
+
+function persistRun(agent, task) {
+  runHistory.unshift(buildRunRecord(agent, task));
+  runHistory = runHistory.slice(0, RUN_HISTORY_LIMIT);
+  saveRunHistory();
+  renderRunHistory();
+}
+
+function downloadRunHistory() {
+  const blob = new Blob([JSON.stringify(runHistory, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'agent_runs_' + formatDownloadTimestamp(new Date()) + '.json';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function clearRunHistory() {
+  runHistory = [];
+  try {
+    localStorage.removeItem(RUN_HISTORY_STORAGE_KEY);
+  } catch {
+    // Ignore storage failures.
+  }
+  renderRunHistory();
 }
 
 function renderTaskList(listElement, tasks, emptyMessage, showActions) {
@@ -1456,6 +1611,7 @@ function appendToAgentOutput(agentName, type, message) {
 }
 
 function appendToResponsePane(agentName, type, message) {
+  if (!dom.responsePane) return;
   const line = document.createElement('div');
   line.className = 'response-line resp-' + type;
 
@@ -1691,6 +1847,12 @@ function generateMcpSimulatedOutput(adapter, taskLabel) {
       lines.push('🤖 AI.search() → querying LLM...');
       lines.push('  200 OK — received response, extracted 1,247 words');
       lines.push('🤖 AI.summarize() → OK');
+      break;
+    }
+    case 'weather': {
+      lines.push('🌦️ Weather.get_weather() → querying live weather source...');
+      lines.push('  wttr.in responded with current conditions and forecast data');
+      lines.push('🌦️ Weather.summarize_forecast() → OK');
       break;
     }
     case 'atlassian': {
@@ -2001,6 +2163,10 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
   switch (adapter.id) {
     case 'github': {
       return await fetchGitHubReal(cv, label);
+    }
+
+    case 'weather': {
+      return await fetchWeatherReal(taskLabel);
     }
 
     case 'terminal': {
@@ -2955,6 +3121,7 @@ function finishTask(agent, task) {
   task.status = 'done';
   task.completedAt = new Date().toISOString();
   agent.history.unshift(task);
+  persistRun(agent, task);
   agent.status = agent.tasks.length ? 'busy' : 'idle';
   // Trigger walk-back + beer sip animation if no more tasks
   if (!agent.tasks.length && (agent.walkState === 'away' || agent.walkState === 'leaving')) {
@@ -2974,6 +3141,7 @@ function markTaskDone(agentId, taskId) {
   task.status = 'done';
   task.completedAt = new Date().toISOString();
   agent.history.unshift(task);
+  persistRun(agent, task);
   agent.status = agent.tasks.length ? 'busy' : 'idle';
   // Trigger walk-back + beer sip animation if no more tasks
   if (!agent.tasks.length && (agent.walkState === 'away' || agent.walkState === 'leaving')) {
@@ -3505,15 +3673,19 @@ async function init() {
   const loaded = await loadMcpAdapters();
   mcpAdapters.length = 0;
   loaded.forEach((a) => mcpAdapters.push(a));
+  runHistory = loadRunHistory();
 
   renderRoster();
   renderSidebar();
   renderMcpCheckboxes();
   renderMcpAdapterPanel();
   dom.assignForm.addEventListener('submit', handleAssignSubmit);
-  dom.clearResponsePane.addEventListener('click', () => {
-    dom.responsePane.innerHTML = '';
-  });
+  if (dom.downloadRunHistory) {
+    dom.downloadRunHistory.addEventListener('click', downloadRunHistory);
+  }
+  if (dom.clearRunHistory) {
+    dom.clearRunHistory.addEventListener('click', clearRunHistory);
+  }
   dom.clearAgentOutput.addEventListener('click', () => {
     dom.agentOutputPane.innerHTML = '';
     agentOutputCount = 0;
