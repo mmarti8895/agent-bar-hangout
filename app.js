@@ -1264,7 +1264,13 @@ function renderRunHistory() {
 
     const stamp = document.createElement('span');
     stamp.className = 'eyebrow';
-    stamp.textContent = 'Run completed ' + formatIsoTime(run.completedAt);
+    const completedAt = run.completedAt;
+    const hasValidCompletedAt = completedAt instanceof Date
+      ? !Number.isNaN(completedAt.getTime())
+      : !!completedAt && !Number.isNaN(new Date(completedAt).getTime());
+    stamp.textContent = hasValidCompletedAt
+      ? 'Run completed ' + formatIsoTime(completedAt)
+      : 'Run completed —';
 
     meta.appendChild(title);
     meta.appendChild(details);
