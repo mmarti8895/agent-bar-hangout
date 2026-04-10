@@ -4,16 +4,9 @@
             "approve": true,
             "matchCommandLine": true
         },
-        "x86": true,
-        "&": true,
-        "/^cmd /c 'call \"C:\\\\Program Files \\(x86\\)\\\\Microsoft Visual Studio\\\\2022\\\\BuildTools\\\\Common7\\\\Tools\\\\VsDevCmd\\.bat\" -arch=x64 -host_arch=x64 >nul & cargo build'$/": {
+        "/^Get-NetTCPConnection$/": {
             "approve": true,
             "matchCommandLine": true
-        },
-        "/^cmd /c 'call \"C:\\\\Program Files \\(x86\\)\\\\Microsoft Visual Studio\\\\2022\\\\BuildTools\\\\Common7\\\\Tools\\\\VsDevCmd\\.bat\" -arch=x64 -host_arch=x64 >nul & cd /d C:\\\\Users\\\\mmart\\\\projects\\\\agent-bar-hangout & npm run tauri:dev'$/": {
-            "approve": true,
-            "matchCommandLine": true
-        },
-        "Get-NetTCPConnection": true
+        }
     }
 }
