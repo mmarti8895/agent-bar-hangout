@@ -9,12 +9,27 @@
     "tauri:dev": "node scripts/ensure-cargo.js tauri dev",
     "tauri:build": "node scripts/ensure-cargo.js tauri build",
     "test": "npx playwright test",
+    "lint": "echo 'No linter configured'",
+    "format": "echo 'No formatter configured'",
+    "prepare": "node -e \"try{require('child_process').execSync('npx husky install',{stdio:'inherit'})}catch(e){}\"",
     "test:headed": "npx playwright test --headed",
-    "test:ui": "npx playwright test --ui"
+    "test:ui": "npx playwright test --ui",
+    "coverage:unit": "c8 node tests/unit/run_coverage.cjs",
+    "stop": "node scripts/shutdown.cjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.52.0",
     "@tauri-apps/cli": "^2.10.1"
+    ,
+    "c8": "^8.0.0"
+  },
+  "husky": {
+    "hooks": {
+      "pre-commit": "npx lint-staged"
+    }
+  },
+  "lint-staged": {
+    "*.js": ["eslint --fix", "git add"]
   },
   "dependencies": {
     "@tauri-apps/api": "^2.10.1"

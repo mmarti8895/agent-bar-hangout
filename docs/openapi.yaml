@@ -1,0 +1,94 @@
+openapi: 3.0.3
+info:
+  title: Agent Bar Hangout - Dev Server API
+  version: 1.0.0
+  description: Minimal API used for local development (memory store, Hermes compatibility, LLM proxy)
+servers:
+  - url: http://localhost:8080
+paths:
+  /api/hermes/assign:
+    post:
+      summary: Accept a Hermes-style assignment and store it in memory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Assignment accepted
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/memory/get:
+    post:
+      summary: Get memory store key or full store
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                key:
+                  type: string
+      responses:
+        '200':
+          description: Memory returned
+  /api/memory/set:
+    post:
+      summary: Set memory key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, value]
+              properties:
+                key:
+                  type: string
+                value:
+                  nullable: true
+                  description: Arbitrary JSON value to store.
+      responses:
+        '200':
+          description: Key stored
+  /api/chat:
+    post:
+      summary: LLM proxy endpoint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prompt:
+                  type: string
+                agentId:
+                  type: string
+                vendor:
+                  type: string
+      responses:
+        '200':
+          description: LLM answer
+  /api/terminal:
+    post:
+      summary: Execute a terminal command (dev only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                command:
+                  type: string
+                shell:
+                  type: string
+      responses:
+        '200':
+          description: Command executed
