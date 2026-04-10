@@ -18,6 +18,7 @@ const dom = {
   taskList: document.getElementById('taskList'),
   historyList: document.getElementById('historyList'),
   downloadRunHistory: document.getElementById('downloadRunHistory'),
+  clearRunHistory: document.getElementById('clearRunHistory'),
   selectedName: document.getElementById('selectedAgentName'),
   selectedRole: document.getElementById('selectedAgentRole'),
   selectedMood: document.getElementById('selectedAgentMood'),
@@ -52,6 +53,7 @@ const stageElement = document.querySelector('.bar-stage');
 
 const RUN_HISTORY_STORAGE_KEY = 'agentBarHangout_runHistory';
 const RUN_HISTORY_LIMIT = 10;
+const RUN_HISTORY_FIELD_MAX_LEN = 500;
 
 /* ───────── Agent definitions ───────── */
 const baseAgents = [
@@ -1292,19 +1294,25 @@ function buildRunRecord(agent, task) {
     return adapter ? adapter.name : id;
   });
   const resultEntry = [...(task.log || [])].reverse().find((entry) => entry.type === 'result');
+  const rawInstructions = task.instructions || '';
+  const rawResult = resultEntry ? resultEntry.message : '';
   return {
     id: task.id,
     agentId: agent.id,
     agentName: agent.name,
     label: task.label,
-    instructions: task.instructions || '',
+    instructions: rawInstructions.length > RUN_HISTORY_FIELD_MAX_LEN
+      ? rawInstructions.slice(0, RUN_HISTORY_FIELD_MAX_LEN) + '…'
+      : rawInstructions,
     mcpIds: [...(task.mcpIds || [])],
     mcpNames,
     etaMinutes: task.etaMinutes || null,
     createdAt: task.createdAt,
     completedAt: task.completedAt,
-    result: resultEntry ? resultEntry.message : '',
-    log: (task.log || []).map((entry) => ({ type: entry.type, message: entry.message })),
+    result: rawResult.length > RUN_HISTORY_FIELD_MAX_LEN
+      ? rawResult.slice(0, RUN_HISTORY_FIELD_MAX_LEN) + '…'
+      : rawResult,
+    // log is intentionally omitted to avoid persisting potentially sensitive tool outputs
   };
 }
 
@@ -1325,6 +1333,16 @@ function downloadRunHistory() {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+function clearRunHistory() {
+  runHistory = [];
+  try {
+    localStorage.removeItem(RUN_HISTORY_STORAGE_KEY);
+  } catch {
+    // Ignore storage failures.
+  }
+  renderRunHistory();
 }
 
 function renderTaskList(listElement, tasks, emptyMessage, showActions) {
@@ -3664,6 +3682,9 @@ async function init() {
   dom.assignForm.addEventListener('submit', handleAssignSubmit);
   if (dom.downloadRunHistory) {
     dom.downloadRunHistory.addEventListener('click', downloadRunHistory);
+  }
+  if (dom.clearRunHistory) {
+    dom.clearRunHistory.addEventListener('click', clearRunHistory);
   }
   dom.clearAgentOutput.addEventListener('click', () => {
     dom.agentOutputPane.innerHTML = '';

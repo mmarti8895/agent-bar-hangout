@@ -339,6 +339,10 @@ test.describe('Clear buttons', () => {
     await waitForScene(page);
   });
 
+  test('clear run history button is visible', async ({ page }) => {
+    await expect(page.locator('#clearRunHistory')).toBeVisible();
+  });
+
   test('download history button downloads a timestamped json file', async ({ page }) => {
     await page.evaluate(() => {
       localStorage.setItem('agentBarHangout_runHistory', JSON.stringify([{ id: 'run-1', agentName: 'Nova', label: 'Stored run', instructions: '', mcpNames: [], completedAt: new Date().toISOString() }]));
@@ -594,6 +598,52 @@ test.describe('Task history', () => {
     await page.reload();
 
     await expect(page.locator('#historyList .task-card')).toHaveCount(10);
+  });
+
+  test('clear run history button empties the list and removes localStorage entry', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(() => {
+      localStorage.setItem('agentBarHangout_runHistory', JSON.stringify([
+        { id: 'run-1', agentName: 'Nova', label: 'Stored run', instructions: '', mcpNames: [], completedAt: new Date().toISOString() }
+      ]));
+    });
+    await page.reload();
+
+    // Confirm the entry is visible
+    await expect(page.locator('#historyList .task-card')).toHaveCount(1);
+
+    // Click the clear button
+    await page.locator('#clearRunHistory').click();
+
+    // List should now show the empty placeholder
+    await expect(page.locator('#historyList .empty')).toBeVisible();
+    await expect(page.locator('#historyList .task-card')).toHaveCount(0);
+
+    // localStorage key should be gone after reload
+    await page.reload();
+    await expect(page.locator('#historyList .empty')).toBeVisible();
+  });
+
+  test('persisted run record omits log field', async ({ page }) => {
+    await page.goto('/');
+    await waitForScene(page);
+
+    await page.locator('#taskTitle').fill('Redact log test');
+    await page.locator('#assignForm button[type="submit"]').click();
+
+    await expect(page.locator('.task-card').first()).toContainText(/Done|done/, { timeout: 30000 });
+    const doneBtn = page.locator('.task-card [data-action="done"]');
+    if (await doneBtn.count() > 0) await doneBtn.first().click();
+
+    await expect(page.locator('#historyList')).toContainText('Redact log test', { timeout: 5000 });
+
+    const hasLog = await page.evaluate(() => {
+      const raw = localStorage.getItem('agentBarHangout_runHistory');
+      if (!raw) return false;
+      const records = JSON.parse(raw);
+      return records.some((r) => Object.prototype.hasOwnProperty.call(r, 'log'));
+    });
+    expect(hasLog).toBe(false);
   });
 });
 
