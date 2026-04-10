@@ -1223,7 +1223,12 @@ function loadRunHistory() {
 }
 
 function saveRunHistory() {
-  localStorage.setItem(RUN_HISTORY_STORAGE_KEY, JSON.stringify(runHistory.slice(0, RUN_HISTORY_LIMIT)));
+  const trimmedHistory = runHistory.slice(0, RUN_HISTORY_LIMIT);
+  try {
+    localStorage.setItem(RUN_HISTORY_STORAGE_KEY, JSON.stringify(trimmedHistory));
+  } catch {
+    // Ignore storage write failures so task completion can proceed.
+  }
 }
 
 function formatDownloadTimestamp(date) {
