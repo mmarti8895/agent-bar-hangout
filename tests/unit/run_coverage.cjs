@@ -44,6 +44,7 @@ async function waitForHealth(timeoutMs = 10000) {
     'tests/unit/hermes_delete.spec.mjs',
     'tests/unit/context.spec.mjs',
     'tests/unit/proxies.spec.mjs',
+    'tests/unit/endpoints.spec.mjs',
   ];
   let exitCode = 0;
   for (const t of tests) {

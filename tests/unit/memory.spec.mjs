@@ -11,7 +11,8 @@ function assert(cond, msg) {
   console.log('✅ ' + msg);
 }
 
-const BASE = 'http://localhost:8080';
+const PORT = process.env.PORT || 8080;
+const BASE = `http://localhost:${PORT}`;
 async function postJson(path, body) {
   const res = await fetch(BASE + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   return res.json();

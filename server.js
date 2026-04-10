@@ -322,9 +322,18 @@ async function callOpenAI(systemPrompt, ctx, prompt, vc) {
   const messages = buildMessages(systemPrompt, ctx, prompt);
   const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey };
   if (vc.orgId) headers['OpenAI-Organization'] = vc.orgId;
+
+  // Some newer OpenAI models (and API versions) expect `max_completion_tokens`
+  // instead of `max_tokens`. Use `vc.max_completion_tokens` if provided,
+  // otherwise default to 1024. This avoids 400 errors like:
+  // Unsupported parameter: 'max_tokens' is not supported with this model.
+  const payload = { model: vc.model || 'gpt-4o-mini', messages, temperature: 0.7 };
+  if (vc.max_completion_tokens !== undefined) payload.max_completion_tokens = vc.max_completion_tokens;
+  else payload.max_completion_tokens = 1024;
+
   const resp = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST', headers,
-    body: JSON.stringify({ model: vc.model || 'gpt-4o-mini', messages, max_tokens: 1024, temperature: 0.7 }),
+    body: JSON.stringify(payload),
   });
   if (!resp.ok) throw new Error('OpenAI HTTP ' + resp.status + ': ' + await resp.text());
   const data = await resp.json();
@@ -348,10 +357,11 @@ async function callAnthropic(systemPrompt, ctx, prompt, vc) {
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: vc.model || 'claude-sonnet-4-20250514',
-      max_tokens: 1024,
-      system: systemPrompt,
-      messages,
+        model: vc.model || 'claude-sonnet-4-20250514',
+        // Anthropic uses `max_tokens_to_sample` for sampling limits
+        max_tokens_to_sample: vc.max_tokens_to_sample !== undefined ? vc.max_tokens_to_sample : 1024,
+        system: systemPrompt,
+        messages,
     }),
   });
   if (!resp.ok) throw new Error('Anthropic HTTP ' + resp.status + ': ' + await resp.text());
@@ -393,7 +403,11 @@ async function callXAI(systemPrompt, ctx, prompt, vc) {
   const resp = await fetch('https://api.x.ai/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + vc.apiKey },
-    body: JSON.stringify({ model: vc.model || 'grok-3', messages, max_tokens: 1024, temperature: 0.7 }),
+    body: JSON.stringify((() => {
+      const p = { model: vc.model || 'grok-3', messages, temperature: 0.7 };
+      p.max_completion_tokens = vc.max_completion_tokens !== undefined ? vc.max_completion_tokens : 1024;
+      return p;
+    })()),
   });
   if (!resp.ok) throw new Error('xAI HTTP ' + resp.status + ': ' + await resp.text());
   const data = await resp.json();
@@ -407,7 +421,11 @@ async function callDeepSeek(systemPrompt, ctx, prompt, vc) {
   const resp = await fetch('https://api.deepseek.com/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + vc.apiKey },
-    body: JSON.stringify({ model: vc.model || 'deepseek-chat', messages, max_tokens: 1024, temperature: 0.7 }),
+    body: JSON.stringify((() => {
+      const p = { model: vc.model || 'deepseek-chat', messages, temperature: 0.7 };
+      p.max_completion_tokens = vc.max_completion_tokens !== undefined ? vc.max_completion_tokens : 1024;
+      return p;
+    })()),
   });
   if (!resp.ok) throw new Error('DeepSeek HTTP ' + resp.status + ': ' + await resp.text());
   const data = await resp.json();
@@ -446,7 +464,11 @@ async function callMistral(systemPrompt, ctx, prompt, vc) {
   const resp = await fetch('https://api.mistral.ai/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + vc.apiKey },
-    body: JSON.stringify({ model: vc.model || 'mistral-large-latest', messages, max_tokens: 1024, temperature: 0.7 }),
+    body: JSON.stringify((() => {
+      const p = { model: vc.model || 'mistral-large-latest', messages, temperature: 0.7 };
+      p.max_completion_tokens = vc.max_completion_tokens !== undefined ? vc.max_completion_tokens : 1024;
+      return p;
+    })()),
   });
   if (!resp.ok) throw new Error('Mistral HTTP ' + resp.status + ': ' + await resp.text());
   const data = await resp.json();
@@ -484,7 +506,11 @@ async function callPerplexity(systemPrompt, ctx, prompt, vc) {
   const resp = await fetch('https://api.perplexity.ai/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + vc.apiKey },
-    body: JSON.stringify({ model: vc.model || 'sonar-pro', messages, max_tokens: 1024, temperature: 0.7 }),
+    body: JSON.stringify((() => {
+      const p = { model: vc.model || 'sonar-pro', messages, temperature: 0.7 };
+      p.max_completion_tokens = vc.max_completion_tokens !== undefined ? vc.max_completion_tokens : 1024;
+      return p;
+    })()),
   });
   if (!resp.ok) throw new Error('Perplexity HTTP ' + resp.status + ': ' + await resp.text());
   const data = await resp.json();

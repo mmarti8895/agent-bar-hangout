@@ -19,8 +19,8 @@ test('quick mocked task assignment updates UI without LLM', async ({ page, reque
     const card = page.locator('.task-card').first();
     await expect(card).toBeVisible({ timeout: 5000 });
     await expect(card).toContainText('Quick mocked task');
-    // The app prepends '📋 RESULT — ' to data.answer; pipeline steps take 800-2500ms each
-    await expect(page.locator('#responsePane')).toContainText('mocked answer', { timeout: 15000 });
+    // The app prepends '📋 RESULT — ' to data.answer and writes final output to Agent Output
+    await expect(page.locator('#agentOutputPane')).toContainText('mocked answer', { timeout: 15000 });
   } else {
     // Full in-page mock: provide minimal DOM and mocked APIs
     await page.setContent(`<html><body>
@@ -29,14 +29,14 @@ test('quick mocked task assignment updates UI without LLM', async ({ page, reque
         <button type="submit">Assign</button>
       </form>
       <div id="taskList"></div>
-      <div id="responsePane"></div>
+      <div id="agentOutputPane"></div>
       <script>
         document.getElementById('assignForm').addEventListener('submit', (e)=>{
           e.preventDefault();
           const title = document.getElementById('taskTitle').value;
           const card = document.createElement('div'); card.className='task-card'; card.textContent = title; document.getElementById('taskList').appendChild(card);
           // fake LLM response
-          document.getElementById('responsePane').textContent = 'mocked answer';
+          document.getElementById('agentOutputPane').textContent = 'mocked answer';
         });
       </script>
     </body></html>`);
@@ -45,6 +45,6 @@ test('quick mocked task assignment updates UI without LLM', async ({ page, reque
     const card = page.locator('.task-card').first();
     await expect(card).toBeVisible({ timeout: 2000 });
     await expect(card).toContainText('Quick mocked task');
-    await expect(page.locator('#responsePane')).toContainText('mocked answer');
+    await expect(page.locator('#agentOutputPane')).toContainText('mocked answer');
   }
 });

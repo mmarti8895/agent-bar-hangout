@@ -35,13 +35,23 @@ A typical-themed 3D bar where AI "worker agents" hang out waiting for task assig
 - Assign tasks with title, instructions, ETA, and MCP adapter selection
 - Task progress pipeline: connect → MCP tool calls → process → result → verify → done
 - Per-agent task history and working animations
+- Persisted run history for the last 10 completed runs with JSON export
 
-### MCP Adapter Registry (19 Built-In)
+### Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `←` / `→` | Cycle through agents |
+| Click agent card | Select agent |
+| Click 3D agent | Select agent + camera focus |
+
+### MCP Adapter Registry (20 Built-In)
 | Adapter | Type | Description |
 |---------|------|-------------|
 | 🐙 **GitHub** | Real | Repo, issue, and PR fetching via GitHub REST API |
 | 📁 **Filesystem** | Simulated | File read/write/list operations |
 | 🤖 **AI Search** | Real | LLM-powered queries via multiple AI vendors (ChatGPT, Claude, Gemini, Grok, DeepSeek, Ollama, Mistral, Cohere, Perplexity) |
+| 🌦️ **Weather** | Real | Live current weather and short forecast via wttr.in |
 | 🗄️ **Database** | Simulated | SQL query execution |
 | 💬 **Slack** | Real | Channel messaging via Slack API |
 | ⚡ **Terminal** | Real | Live shell command execution (PowerShell / bash) |
@@ -63,7 +73,7 @@ Custom adapters can be added through the MCP configuration modal. Adapter settin
 ### Real API Integrations
 - **Multi-LLM AI Search** — proxied through the Node.js server (web) or Rust backend (Tauri) supporting 9 vendors (OpenAI, Anthropic, Google, xAI, DeepSeek, Ollama, Mistral, Cohere, Perplexity) with per-agent rolling conversation context (3-min TTL, max 5 message pairs)
 - **GitHub REST API** — fetch repos, issues, and PRs when configured with a token
-- **wttr.in** — real weather data with natural language location extraction
+- **wttr.in** — real weather data with natural language location extraction, exposed through the Weather MCP adapter
 - **Wikipedia** — web search fallback via MediaWiki API
 
 ### UI Panels
@@ -71,7 +81,7 @@ Custom adapters can be added through the MCP configuration modal. Adapter settin
 - Agent roster grid with status indicators
 - Task assignment form with adapter selection
 - Active tasks list with progress bars and step logs
-- Work Output pane (streaming response feed)
+- Run History panel with download button for the last 10 completed runs
 - Agent Output pane (final results)
 - Activity Log table
 - MCP configuration modal
@@ -110,6 +120,8 @@ cp .env.example .env        # Linux / macOS
 Copy-Item .env.example .env # PowerShell
 ```
 Then edit `.env` and set any keys you need (e.g. `OPENAI_API_KEY`). See [`.env.example`](.env.example) for all available options. Other LLM vendors can be configured at runtime in the MCP Configuration modal.
+
+Desktop (Tauri) note: adapter credentials (API keys, tokens) are stored in the OS credential vault and are associated with an `adapter_id`. The desktop frontend uses the Tauri `vault_store`, `vault_get`, and `vault_delete` commands to persist/retrieve a credentials map for each MCP adapter; when configuring an MCP adapter in desktop mode, save the provided API keys so MCP adapters (such as AI Search) can use them at runtime.
 
 ### Desktop App (Tauri)
 ```bash
@@ -167,18 +179,18 @@ The port defaults to `8080` and can be changed via the `PORT` environment variab
 
 ## Testing
 
-### Playwright E2E Tests (59 tests)
+### Playwright E2E and Integration Tests
 ```bash
 npm install
 npx playwright install --with-deps chromium
 npx playwright test
 ```
 
-### Unit Tests (52 tests)
-Covers location extraction, weather API calls, multi-city fetches, edge cases, and LLM proxy integration.
+### Unit Coverage Run
+Covers memory flows, Hermes integration, context clearing, proxy auth failures, endpoint validation branches, and server-side coverage for `server.js`.
 
 ```bash
-node test-web-fetch.mjs
+npm run coverage:unit
 ```
 
 For tests that exercise the LLM proxy endpoint, start the server on port 3000 first:
@@ -188,7 +200,7 @@ PORT=3000 node server.js
 node test-web-fetch.mjs
 ```
 
-### Hermes Integration (dev)
+## Hermes Integration (dev)
 
 The dev server exposes a minimal Hermes-compatible assignment endpoint and a small persistent memory API useful for local integrations and testing.
 
@@ -239,19 +251,34 @@ Security
 - The memory and Hermes endpoints are intentionally unprotected in the dev server. Do not expose the dev server to untrusted networks. Add authentication and authorization before using these endpoints in shared environments.
 
 
-### Test Coverage
+### Quality Metrics
 
-**Playwright E2E — 59 tests, all passing**
+Latest locally verified results:
 
+**Playwright and integration tests**
+
+```text
+Running 69 tests using 1 worker
+  69 passed (6.5m)
 ```
-Running 59 tests using 2 workers
-  59 passed (5.1m)
+
+**Unit coverage (`npm run coverage:unit`)**
+
+```text
+-----------|---------|----------|---------|---------|
+File       | % Stmts | % Branch | % Funcs | % Lines |
+-----------|---------|----------|---------|---------|
+All files  |   65.58 |     67.5 |   69.44 |   65.58 |
+server.js  |   65.58 |     67.5 |   69.44 |   65.58 |
+-----------|---------|----------|---------|---------|
 ```
 
-**Unit Tests — 52 tests, all passing**
+**Security metrics (`npm audit --json`)**
 
-```
-Results: 52 passed, 0 failed
+```text
+Dependencies audited: 77 total
+Known vulnerabilities: 0
+Info: 0, Low: 0, Moderate: 0, High: 0, Critical: 0
 ```
 
 ### Developer Notes
@@ -295,10 +322,10 @@ curl http://localhost:8080/health
 |---|-------|------:|--------|
 | 1 | Page load | 4 | Title, sections, roster, canvas rendering |
 | 2 | Agent selection | 4 | Default selection, click, arrow-key cycling, role display |
-| 3 | Task assignment form | 7 | Required fields, validation, MCP checkboxes, task creation, response pane, activity log |
+| 3 | Task assignment form | 7 | Required fields, validation, MCP checkboxes, task creation, final output pane, activity log |
 | 4 | MCP configuration modal | 5 | Open/close, adapter listing, custom adapter form, adding |
-| 5 | Task pipeline execution | 3 | Progress steps, agent output, GitHub simulated output |
-| 6 | Clear buttons | 2 | Clear response pane, clear activity log |
+| 5 | Task pipeline execution | 4 | Progress steps, agent output, GitHub simulated output, Weather MCP output |
+| 6 | Clear buttons | 2 | Download history JSON, clear activity log |
 | 7 | Toast notifications | 1 | Task-assignment toast |
 | 8 | MCP adapter panel | 2 | Card rendering, count label |
 | 9 | Multi-adapter task | 1 | Multiple adapters produce output |
@@ -320,7 +347,7 @@ curl http://localhost:8080/health
 1. **Select an agent** by clicking their card in the roster or clicking them in the 3D scene. Use arrow keys to cycle.
 2. **Assign a task** using the task form — enter a title, instructions, pick an MCP adapter, and set an ETA.
 3. **Watch progress** in the Active Tasks panel as the agent works through the pipeline steps.
-4. **View results** in the Work Output and Agent Output panes.
+4. **View results** in the Agent Output pane and Run History panel.
 5. **Configure adapters** via the MCP Configuration button — add API keys, endpoints, or create custom adapters.
 
 ---
@@ -336,7 +363,7 @@ curl http://localhost:8080/health
 ├── build-frontend.js       # Copies web assets to dist/ for Tauri builds
 ├── test-web-fetch.mjs      # Unit tests for weather/location/LLM features
 ├── tests/
-│   └── app.spec.js         # Playwright E2E tests (58 tests)
+│   └── app.spec.js         # Playwright UI tests (currently part of 69 passing tests)
 ├── playwright.config.js    # Playwright test configuration
 ├── package.json            # Dependencies (Tauri CLI, Tauri API, Playwright)
 ├── .env                    # LLM API keys (not committed)
@@ -390,16 +417,6 @@ curl http://localhost:8080/health
 | **CSS Custom Properties** | Dark cyberpunk theming |
 | **ES Modules** | Client and server module system |
 | **localStorage** | MCP adapter config persistence (web mode) |
-
----
-
-## Keyboard Shortcuts
-
-| Key | Action |
-|-----|--------|
-| `←` / `→` | Cycle through agents |
-| Click agent card | Select agent |
-| Click 3D agent | Select agent + camera focus |
 
 ---
 

@@ -13,13 +13,14 @@
     "format": "echo 'No formatter configured'",
     "prepare": "node -e \"try{require('child_process').execSync('npx husky install',{stdio:'inherit'})}catch(e){}\"",
     "test:headed": "npx playwright test --headed",
-    "test:ui": "npx playwright test --ui"
-    ,"coverage:unit": "c8 node tests/unit/run_coverage.cjs"
+    "test:ui": "npx playwright test --ui",
+    "coverage:unit": "c8 node tests/unit/run_coverage.cjs",
+    "stop": "node scripts/shutdown.cjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.52.0",
     "@tauri-apps/cli": "^2.10.1"
-  ,
+    ,
     "c8": "^8.0.0"
   },
   "husky": {
