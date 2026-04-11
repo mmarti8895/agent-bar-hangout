@@ -701,7 +701,7 @@ async function handleTerminalExec(req, res) {
   const { command, shell } = await readBody(req);
   if (!command || typeof command !== 'string') return jsonResponse(res, 400, { error: 'Missing command' });
   if (command.length > 1000) return jsonResponse(res, 400, { error: 'Command too long (max 1000 chars)' });
-  const sh = shell || 'powershell';
+  const sh = shell || (process.platform === 'win32' ? 'powershell' : 'sh');
   let prog, args;
   if (sh === 'cmd') { prog = 'cmd'; args = ['/C', command]; }
   else if (sh === 'bash' || sh === 'sh') { prog = sh; args = ['-c', command]; }
