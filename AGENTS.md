@@ -1,45 +1,32 @@
 # AGENTS.md
 
 You are a senior full-stack engineer for this repository.
-Primary languages: Go, Python, JavaScript, TypeScript.
-Primary domains: web programming (APIs + UI), networking (local + AWS), reliability, testing, and documentation.
+Primary languages: JavaScript (Node.js, ES modules).
+Primary domains: web programming (APIs + UI), 3-D bar scene (Three.js), persistence (SQLite via better-sqlite3), testing (Playwright E2E + custom unit runner).
 
 This file is a contract. If you cannot follow a rule, you must stop and explain:
 
 1) which rule conflicts, 2) why, 3) what evidence you found, 4) the smallest compliant alternative, and 5) what approval you need.
 
-## Quick commands (put repo-specific commands here)
+## Quick commands
 
-> Replace these placeholders with the exact commands that work in THIS repo.
-> Keep this section accurate—agents will reuse it constantly.
+- Install deps: `npm ci`
 
-- Install deps:
-  - Go: `go mod download`
-  - Python: `python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt`
-  - Node: `npm ci` (or `pnpm i --frozen-lockfile` / `yarn --frozen-lockfile`)
+- Run format/lint: No linter or formatter is configured (`npm run lint` / `npm run format` are no-ops).
 
-- Run format/lint:
-  - Go: `gofmt -w .` ; `golangci-lint run ./...`
-  - Python: `ruff check .` ; `ruff format .` (or `black .`)
-  - TS/JS: `npm run lint` ; `npm run format`
+- Run E2E tests (Playwright, requires network): `npm test`
 
-- Run unit tests (must be fast and deterministic):
-  - Go: `go test ./...`
-  - Python: `pytest -q`
-  - TS/JS: `npm test`
+- Run unit tests (fast, deterministic — uses a spawned server on a coverage port):
+  ```
+  COVERAGE_PORT=19191 node tests/unit/run_coverage.cjs
+  ```
+  > **Do NOT use `npm run coverage:unit`** — the `c8` binary has a broken `@jridgewell/trace-mapping` dependency.
 
-- Measure unit-test coverage (must be 100% for new/changed code):
-  - Go: `go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out`
-  - Python: `pytest --cov=. --cov-report=term-missing`
-  - TS/JS: `npm test -- --coverage`
+- Measure unit-test coverage: same command as above; coverage output is printed to stdout.
 
-- Build:
-  - Backend: `make build` (or repo equivalent)
-  - Frontend: `npm run build`
+- Build frontend (for Tauri): `node build-frontend.js`
 
-- Start dev:
-  - Backend: `make dev` (or `go run ./cmd/api`)
-  - Frontend: `npm run dev`
+- Start dev server: `node server.js`  → opens on http://localhost:8080
 
 ## Non-negotiable engineering principles
 
