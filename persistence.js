@@ -333,6 +333,11 @@ export function createPersistence(options = {}) {
     statements.deletePendingHermes.run();
   }
 
+  function clearAllState() {
+    clearMemoryStore();
+    database.prepare('DELETE FROM tasks').run();
+  }
+
   function upsertTask(task) {
     const normalized = normalizeTaskInput(task);
     statements.upsertTask.run(normalized);
@@ -513,6 +518,7 @@ export function createPersistence(options = {}) {
     listMemoryKeys,
     deleteMemoryValue,
     clearMemoryStore,
+    clearAllState,
     upsertTask,
     transitionTask,
     deleteTask,

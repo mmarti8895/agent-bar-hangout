@@ -17,6 +17,7 @@ import { createPersistence } from './persistence.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PORT = process.env.PORT || 8080;
+const ENABLE_TEST_API = process.env.ENABLE_TEST_API === '1';
 
 /* ───── Load .env ───── */
 let OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
@@ -220,6 +221,19 @@ async function handleStateTaskDelete(req, res) {
     if (!taskId) return jsonResponse(res, 400, { error: 'Missing taskId' });
     const removed = persistence.deleteTask(taskId);
     return jsonResponse(res, 200, { ok: true, removed });
+  } catch (e) {
+    return jsonResponse(res, 500, { error: e.message });
+  }
+}
+
+async function handleTestReset(_req, res) {
+  if (!ENABLE_TEST_API) {
+    return jsonResponse(res, 404, { error: 'Not found' });
+  }
+  try {
+    persistence.clearAllState();
+    agentContexts.clear();
+    return jsonResponse(res, 200, { ok: true });
   } catch (e) {
     return jsonResponse(res, 500, { error: e.message });
   }
@@ -802,6 +816,11 @@ const server = createServer((req, res) => {
 
   if (req.method === 'POST' && req.url === '/api/state/task/delete') {
     handleStateTaskDelete(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/test/reset') {
+    handleTestReset(req, res);
     return;
   }
 

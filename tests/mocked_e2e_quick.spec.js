@@ -1,5 +1,10 @@
 import { test, expect } from '@playwright/test';
 
+test.beforeEach(async ({ request }) => {
+  const response = await request.post('/api/test/reset');
+  expect(response.ok()).toBeTruthy();
+});
+
 test('quick mocked task assignment updates UI without LLM', async ({ page, request }) => {
   // If server is reachable, run against server but still stub heavy LLM call. If not, fully mock UI.
   let serverAvailable = false;
