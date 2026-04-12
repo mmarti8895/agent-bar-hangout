@@ -182,7 +182,7 @@ export function createPersistence(options = {}) {
     `),
     bootstrapRows: database.prepare(`
       SELECT * FROM tasks
-      WHERE status IN ('pending', 'in_progress', 'done')
+      WHERE status IN ('pending', 'in_progress', 'verifying', 'done')
       ORDER BY created_at ASC
     `),
     latestMigration: database.prepare(`
