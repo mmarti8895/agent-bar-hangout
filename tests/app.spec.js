@@ -621,6 +621,37 @@ test.describe('Activity log download', () => {
     expect(parsed[0]).toHaveProperty('agent');
     expect(parsed[0]).toHaveProperty('details');
   });
+
+  test('persisted run record truncates oversized instructions and result fields', async ({ page }) => {
+    await page.goto('/');
+    await waitForScene(page);
+
+    const longInstructions = 'I'.repeat(520);
+    const longResult = 'R'.repeat(520);
+
+    await page.locator('#taskTitle').fill('Truncate persisted run record');
+    await page.locator('#taskInstructions').fill(longInstructions);
+    await page.locator('#assignForm button[type="submit"]').click();
+
+    await page.evaluate((resultMessage) => {
+      const agent = window.__agentBarState.agents.find((entry) => entry.id === 'nova');
+      const task = agent?.tasks.find((entry) => entry.label === 'Truncate persisted run record');
+      if (!task) throw new Error('Expected active task for truncation test');
+      task.log = [{ type: 'result', message: resultMessage }];
+    }, longResult);
+
+    await page.locator('.task-card [data-action="done"]').first().click();
+    await expect(page.locator('#historyList')).toContainText('Truncate persisted run record');
+
+    const record = await page.evaluate(() => {
+      const raw = localStorage.getItem('agentBarHangout_runHistory');
+      if (!raw) return null;
+      return JSON.parse(raw)[0] || null;
+    });
+
+    expect(record.instructions).toBe(longInstructions.slice(0, 500) + '…');
+    expect(record.result).toBe(longResult.slice(0, 500) + '…');
+  });
 });
 
 /* ═══════════════════════════════════════════════════
