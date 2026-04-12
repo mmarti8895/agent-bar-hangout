@@ -34,8 +34,7 @@ test.describe('Page load', () => {
     await expect(page.locator('#barCanvas')).toBeVisible();
     await expect(page.locator('#rosterGrid')).toBeVisible();
     await expect(page.locator('#assignForm')).toBeVisible();
-    await expect(page.locator('#historyList')).toBeVisible();
-    await expect(page.locator('#downloadRunHistory')).toBeVisible();
+    await expect(page.locator('#downloadLogBtn')).toBeVisible();
     await expect(page.locator('#activityLogBody')).toBeAttached();
     await expect(page.locator('#mcpConfigBtn')).toBeVisible();
   });
@@ -184,6 +183,16 @@ test.describe('Task assignment form', () => {
     // Wait for log count to update from '0 entries'
     await expect(page.locator('#logCount')).not.toHaveText('0 entries', { timeout: 30000 });
   });
+
+  test('active tasks are restored after a page reload', async ({ page }) => {
+    await page.locator('#taskTitle').fill('Persistent reload task');
+    await page.locator('#assignForm button[type="submit"]').click();
+    await expect(page.locator('.task-card')).toContainText('Persistent reload task', { timeout: 5000 });
+
+    await page.reload();
+
+    await expect(page.locator('.task-card')).toContainText('Persistent reload task', { timeout: 5000 });
+  });
 });
 
 /* ═══════════════════════════════════════════════════
@@ -233,6 +242,72 @@ test.describe('MCP configuration modal', () => {
 
     // Check the adapter appears
     await expect(page.locator('#mcpConfigList')).toContainText('TestAdapter');
+  });
+
+  test('legacy directory-reader config is migrated to filesystem adapter', async ({ page }) => {
+    await page.evaluate(() => {
+      localStorage.setItem('agentBarHangout_mcpAdapters', JSON.stringify([
+        {
+          id: 'directory-reader',
+          name: 'Directory Reader',
+          configValues: { rootDir: 'C:\\Temp' },
+        }
+      ]));
+    });
+
+    await page.reload();
+
+    await expect(page.locator('#mcpCheckboxes input[value="filesystem"]')).toHaveCount(1);
+    await expect(page.locator('#mcpCheckboxes input[value="filesystem"]')).toBeEnabled();
+    await expect(page.locator('#mcpCheckboxes input[value="directory-reader"]')).toHaveCount(0);
+  });
+
+  test('legacy saved weather adapter is dropped on load', async ({ page }) => {
+    await page.evaluate(() => {
+      localStorage.setItem('agentBarHangout_mcpAdapters', JSON.stringify([
+        {
+          id: 'weather',
+          name: 'Weather',
+          isDefault: true,
+          configFields: [],
+          configValues: {},
+          tools: ['get_weather']
+        }
+      ]));
+    });
+
+    await page.reload();
+
+    await expect(page.locator('#mcpCheckboxes input[value="weather"]')).toHaveCount(0);
+    await page.locator('#mcpConfigBtn').click();
+    await expect(page.locator('#mcpConfigList [data-mcp-id="weather"]')).toHaveCount(0);
+  });
+
+  test('legacy disabled built-in adapters are auto-enabled on load', async ({ page }) => {
+    await page.evaluate(() => {
+      localStorage.setItem('agentBarHangout_mcpAdapters', JSON.stringify([
+        {
+          id: 'terminal',
+          enabled: false,
+          configValues: {}
+        },
+        {
+          id: 'filesystem',
+          enabled: false,
+          configValues: { rootDir: 'C:\\Temp' }
+        }
+      ]));
+    });
+
+    await page.reload();
+
+    await expect(page.locator('#mcpCheckboxes input[value="terminal"]')).toBeEnabled();
+    await expect(page.locator('#mcpCheckboxes input[value="filesystem"]')).toBeEnabled();
+  });
+
+  test('weather adapter is not present in config list', async ({ page }) => {
+    await page.locator('#mcpConfigBtn').click();
+    await expect(page.locator('#mcpConfigList [data-mcp-id="weather"]')).toHaveCount(0);
   });
 });
 
@@ -286,47 +361,8 @@ test.describe('Task pipeline execution', () => {
     await expect(page.locator('#activityLogBody')).toContainText(/GitHub.+missing required configuration/i);
   });
 
-  test('Weather adapter produces live weather output', async ({ page }) => {
-    await page.route('https://wttr.in/**', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          current_condition: [{
-            temp_F: '61',
-            temp_C: '16',
-            weatherDesc: [{ value: 'Partly cloudy' }],
-            humidity: '58',
-            windspeedMiles: '8',
-            winddir16Point: 'NW',
-            uvIndex: '4',
-            FeelsLikeF: '60',
-            FeelsLikeC: '15'
-          }],
-          nearest_area: [{
-            areaName: [{ value: 'Walton' }],
-            region: [{ value: 'Kentucky' }],
-            country: [{ value: 'United States of America' }]
-          }],
-          weather: [
-            {},
-            {
-              maxtempF: '67',
-              mintempF: '49',
-              hourly: [ {}, {}, {}, {}, { weatherDesc: [{ value: 'Cloudy' }] } ]
-            }
-          ]
-        })
-      });
-    });
-
-    await forceCheckAdapter(page, 'weather');
-    await page.locator('#taskTitle').fill('Compare weather in Walton, KY');
-    await page.locator('#assignForm button[type="submit"]').click();
-
-    await expect(page.locator('.task-card').first()).toContainText(/Done|done/, { timeout: 30000 });
-    await expect(page.locator('#agentOutputPane')).toContainText(/Weather for Walton, Kentucky/i, { timeout: 30000 });
-    await expect(page.locator('#agentOutputPane')).toContainText(/Partly cloudy/i, { timeout: 30000 });
+  test('weather adapter is not present in checkbox list', async ({ page }) => {
+    await expect(page.locator('#mcpCheckboxes input[value="weather"]')).toHaveCount(0);
   });
 });
 
@@ -339,20 +375,20 @@ test.describe('Clear buttons', () => {
     await waitForScene(page);
   });
 
-  test('clear run history button is visible', async ({ page }) => {
-    await expect(page.locator('#clearRunHistory')).toBeVisible();
+  test('activity log buttons are visible', async ({ page }) => {
+    await expect(page.locator('#clearLogBtn')).toBeVisible();
+    await expect(page.locator('#downloadLogBtn')).toBeVisible();
   });
 
-  test('download history button downloads a timestamped json file', async ({ page }) => {
-    await page.evaluate(() => {
-      localStorage.setItem('agentBarHangout_runHistory', JSON.stringify([{ id: 'run-1', agentName: 'Nova', label: 'Stored run', instructions: '', mcpNames: [], completedAt: new Date().toISOString() }]));
-    });
-    await page.reload();
+  test('download activity log button downloads a timestamped json file', async ({ page }) => {
+    await page.locator('#taskTitle').fill('Download activity log test');
+    await page.locator('#assignForm button[type="submit"]').click();
+    await expect(page.locator('#logCount')).not.toHaveText('0 entries', { timeout: 30000 });
 
     const downloadPromise = page.waitForEvent('download');
-    await page.locator('#downloadRunHistory').click();
+    await page.locator('#downloadLogBtn').click();
     const download = await downloadPromise;
-    expect(download.suggestedFilename()).toMatch(/^agent_runs_\d{8}_\d{6}\.json$/);
+    expect(download.suggestedFilename()).toMatch(/^activity_log_\d{8}_\d{6}\.json$/);
   });
 
   test('clear activity log empties table', async ({ page }) => {
@@ -556,94 +592,34 @@ test.describe('Server API', () => {
 });
 
 /* ═══════════════════════════════════════════════════
-   12. TASK HISTORY
+   12. ACTIVITY LOG DOWNLOAD
    ═══════════════════════════════════════════════════ */
-test.describe('Task history', () => {
-  test('completed task moves to history', async ({ page }) => {
+test.describe('Activity log download', () => {
+  test('run history section is removed', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.locator('#historyList')).toHaveCount(0);
+  });
+
+  test('downloaded activity log json contains entries', async ({ page }) => {
     await page.goto('/');
     await waitForScene(page);
 
-    // Use simulated adapter
     await forceCheckAdapter(page, 'terminal');
-
-    await page.locator('#taskTitle').fill('History test task');
+    await page.locator('#taskTitle').fill('Activity JSON check');
     await page.locator('#assignForm button[type="submit"]').click();
+    await expect(page.locator('#logCount')).not.toHaveText('0 entries', { timeout: 30000 });
 
-    // Wait for Done
-    await expect(page.locator('.task-card').first()).toContainText(/Done|done/, { timeout: 30000 });
-
-    // After completion, the "Mark done" button might be available — click it
-    const doneBtn = page.locator('.task-card [data-action="done"]');
-    if (await doneBtn.count() > 0) {
-      await doneBtn.first().click();
-    }
-
-    // History list should have the task
-    await expect(page.locator('#historyList')).toContainText('History test task', { timeout: 5000 });
-  });
-
-  test('run history storage is capped at 10 entries', async ({ page }) => {
-    await page.goto('/');
-    await page.evaluate(() => {
-      const runs = Array.from({ length: 11 }, (_, index) => ({
-        id: 'run-' + index,
-        agentName: 'Nova',
-        label: 'Run ' + index,
-        instructions: '',
-        mcpNames: [],
-        completedAt: new Date(Date.now() - index * 1000).toISOString()
-      }));
-      localStorage.setItem('agentBarHangout_runHistory', JSON.stringify(runs));
-    });
-    await page.reload();
-
-    await expect(page.locator('#historyList .task-card')).toHaveCount(10);
-  });
-
-  test('clear run history button empties the list and removes localStorage entry', async ({ page }) => {
-    await page.goto('/');
-    await page.evaluate(() => {
-      localStorage.setItem('agentBarHangout_runHistory', JSON.stringify([
-        { id: 'run-1', agentName: 'Nova', label: 'Stored run', instructions: '', mcpNames: [], completedAt: new Date().toISOString() }
-      ]));
-    });
-    await page.reload();
-
-    // Confirm the entry is visible
-    await expect(page.locator('#historyList .task-card')).toHaveCount(1);
-
-    // Click the clear button
-    await page.locator('#clearRunHistory').click();
-
-    // List should now show the empty placeholder
-    await expect(page.locator('#historyList .empty')).toBeVisible();
-    await expect(page.locator('#historyList .task-card')).toHaveCount(0);
-
-    // localStorage key should be gone after reload
-    await page.reload();
-    await expect(page.locator('#historyList .empty')).toBeVisible();
-  });
-
-  test('persisted run record omits log field', async ({ page }) => {
-    await page.goto('/');
-    await waitForScene(page);
-
-    await page.locator('#taskTitle').fill('Redact log test');
-    await page.locator('#assignForm button[type="submit"]').click();
-
-    await expect(page.locator('.task-card').first()).toContainText(/Done|done/, { timeout: 30000 });
-    const doneBtn = page.locator('.task-card [data-action="done"]');
-    if (await doneBtn.count() > 0) await doneBtn.first().click();
-
-    await expect(page.locator('#historyList')).toContainText('Redact log test', { timeout: 5000 });
-
-    const hasLog = await page.evaluate(() => {
-      const raw = localStorage.getItem('agentBarHangout_runHistory');
-      if (!raw) return false;
-      const records = JSON.parse(raw);
-      return records.some((r) => Object.prototype.hasOwnProperty.call(r, 'log'));
-    });
-    expect(hasLog).toBe(false);
+    const downloadPromise = page.waitForEvent('download');
+    await page.locator('#downloadLogBtn').click();
+    const download = await downloadPromise;
+    const stream = await download.createReadStream();
+    let content = '';
+    for await (const chunk of stream) content += chunk.toString();
+    const parsed = JSON.parse(content);
+    expect(Array.isArray(parsed)).toBeTruthy();
+    expect(parsed.length).toBeGreaterThan(0);
+    expect(parsed[0]).toHaveProperty('agent');
+    expect(parsed[0]).toHaveProperty('details');
   });
 });
 

@@ -1,4 +1,7 @@
 const { spawnSync, spawn } = require('child_process');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const fetch = globalThis.fetch || require('node-fetch');
 
 const SERVER_CMD = 'node';
@@ -24,7 +27,13 @@ async function waitForHealth(timeoutMs = 10000) {
   console.log('Checking for existing server, starting if needed...');
   // Spawn a fresh server on the coverage port so we can collect coverage reliably.
   console.log('Spawning server for coverage run on port', COVERAGE_PORT);
-  const serverEnv = { ...process.env, PORT: String(COVERAGE_PORT) };
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bar-hangout-coverage-'));
+  const serverEnv = {
+    ...process.env,
+    PORT: String(COVERAGE_PORT),
+    PERSISTENCE_DB_PATH: path.join(tempRoot, 'coverage.db'),
+    PERSISTENCE_MEMORY_FILE_PATH: path.join(tempRoot, 'memories.json'),
+  };
   let server = spawn(SERVER_CMD, SERVER_ARGS, { env: serverEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   server.stdout.on('data', d => process.stdout.write(`[server] ${d}`));
   server.stderr.on('data', d => process.stderr.write(`[server] ${d}`));
@@ -38,6 +47,8 @@ async function waitForHealth(timeoutMs = 10000) {
 
   console.log('Server healthy — running unit tests sequentially under coverage...');
   const tests = [
+    'tests/unit/persistence.spec.mjs',
+    'tests/unit/persistence-migration.spec.mjs',
     'tests/unit/memory.spec.mjs',
     'tests/unit/hermes.spec.mjs',
     'tests/unit/memory_edges.spec.mjs',
@@ -49,7 +60,7 @@ async function waitForHealth(timeoutMs = 10000) {
   let exitCode = 0;
   for (const t of tests) {
     console.log('\nRunning ' + t + '\n');
-    const r = spawnSync('node', [t], { stdio: 'inherit', env: { ...process.env, PORT: String(COVERAGE_PORT) } });
+    const r = spawnSync('node', [t], { stdio: 'inherit', env: serverEnv });
     if (r.status !== 0) exitCode = r.status || 1;
   }
 
