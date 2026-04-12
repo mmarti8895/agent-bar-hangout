@@ -682,8 +682,20 @@ fn bootstrap_conn(conn: &Connection, agent_ids: &[String]) -> Result<BootstrapRe
             entry.tasks.push(task);
         }
     }
+
+    let mut agents = Vec::with_capacity(grouped.len());
+    for agent_id in agent_ids {
+        if let Some(agent) = grouped.remove(agent_id) {
+            agents.push(agent);
+        }
+    }
+
+    let mut discovered_agents: Vec<_> = grouped.into_iter().collect();
+    discovered_agents.sort_by(|(left_id, _), (right_id, _)| left_id.cmp(right_id));
+    agents.extend(discovered_agents.into_iter().map(|(_, agent)| agent));
+
     Ok(BootstrapResponse {
-        agents: grouped.into_values().collect(),
+        agents,
         hermes_tasks: list_pending_hermes(conn)?,
         migration: get_migration_info_conn(conn)?,
     })
