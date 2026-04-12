@@ -10,9 +10,10 @@
  */
 
 import { createServer } from 'node:http';
-import { readFile, stat, writeFile, rename, access } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { join, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createPersistence } from './persistence.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PORT = process.env.PORT || 8080;
@@ -91,31 +92,22 @@ function clearAgentContextServer(agentId) {
 const MAX_BODY_BYTES = 1024 * 1024; // 1 MB limit for POST bodies
 
 /* ───── Simple persistent memory store (memories.json) ───── */
-const MEMORY_FILE = join(__dirname, 'memories.json');
-async function loadMemoryStore() {
-  try {
-    const raw = await readFile(MEMORY_FILE, 'utf-8');
-    return JSON.parse(raw || '{}');
-  } catch (e) {
-    return {};
-  }
-}
-
-async function saveMemoryStore(store) {
-  // Atomic write: write to temp file then rename
-  const tmp = MEMORY_FILE + '.tmp';
-  const payload = JSON.stringify(store, null, 2);
-  await writeFile(tmp, payload, 'utf-8');
-  await rename(tmp, MEMORY_FILE);
+const persistence = createPersistence();
+try {
+  await persistence.migrateFromLegacyFile();
+} catch (error) {
+  console.error('Persistence migration failed:', error.message);
 }
 
 async function handleMemoryGet(req, res) {
   try {
     const body = await readBody(req);
     const key = body.key || null;
-    const store = await loadMemoryStore();
+    const store = persistence.getMemoryStore();
     if (key == null) return jsonResponse(res, 200, { store });
-    return jsonResponse(res, 200, { value: store[key] });
+    const value = persistence.getMemoryValue(key);
+    if (value === undefined) return jsonResponse(res, 200, {});
+    return jsonResponse(res, 200, { value });
   } catch (e) {
     return jsonResponse(res, 500, { error: e.message });
   }
@@ -126,22 +118,17 @@ async function handleMemorySet(req, res) {
     const { key, value } = await readBody(req);
     if (!key) return jsonResponse(res, 400, { error: 'Missing key' });
     if (typeof key !== 'string') return jsonResponse(res, 400, { error: 'Key must be a string' });
-    if (key.length > 256) return jsonResponse(res, 400, { error: 'Key length exceeds 256 characters' });
-    const serialized = JSON.stringify(value === undefined ? null : value);
-    if (serialized.length > 200 * 1024) return jsonResponse(res, 400, { error: 'Value too large (max 200KB)' });
-    const store = await loadMemoryStore();
-    store[key] = value;
-    await saveMemoryStore(store);
+    persistence.setMemoryValue(key, value);
     return jsonResponse(res, 200, { ok: true });
   } catch (e) {
-    return jsonResponse(res, 500, { error: e.message });
+    const status = /Key|Value|Missing key|hermes_tasks/.test(e.message) ? 400 : 500;
+    return jsonResponse(res, status, { error: e.message });
   }
 }
 
 async function handleMemoryKeys(req, res) {
   try {
-    const store = await loadMemoryStore();
-    return jsonResponse(res, 200, { keys: Object.keys(store) });
+    return jsonResponse(res, 200, { keys: persistence.listMemoryKeys() });
   } catch (e) {
     return jsonResponse(res, 500, { error: e.message });
   }
@@ -151,9 +138,7 @@ async function handleMemoryDelete(req, res) {
   try {
     const { key } = await readBody(req);
     if (!key) return jsonResponse(res, 400, { error: 'Missing key' });
-    const store = await loadMemoryStore();
-    if (Object.prototype.hasOwnProperty.call(store, key)) delete store[key];
-    await saveMemoryStore(store);
+    persistence.deleteMemoryValue(key);
     return jsonResponse(res, 200, { ok: true });
   } catch (e) {
     return jsonResponse(res, 500, { error: e.message });
@@ -162,7 +147,7 @@ async function handleMemoryDelete(req, res) {
 
 async function handleMemoryClear(req, res) {
   try {
-    await saveMemoryStore({});
+    persistence.clearMemoryStore();
     return jsonResponse(res, 200, { ok: true });
   } catch (e) {
     return jsonResponse(res, 500, { error: e.message });
@@ -174,25 +159,7 @@ async function handleMemoryClear(req, res) {
 async function handleHermesAssign(req, res) {
   try {
     const body = await readBody(req);
-    // Support multiple possible Hermes shapes; normalize conservatively
-    const hermes = body || {};
-    // Common fields mapping
-    const task = {
-      id: hermes.taskId || hermes.id || (hermes.task && hermes.task.id) || `t_${Date.now()}`,
-      title: hermes.title || (hermes.task && hermes.task.title) || hermes.summary || 'Hermes Task',
-      instructions: hermes.instructions || (hermes.task && hermes.task.instructions) || hermes.description || '',
-      etaMinutes: hermes.etaMinutes || (hermes.task && hermes.task.eta) || hermes.eta || null,
-      assignee: hermes.targetAgent || hermes.assignee || (hermes.task && hermes.task.assignee) || null,
-      metadata: hermes.metadata || hermes.meta || {},
-      receivedAt: new Date().toISOString(),
-    };
-
-    // Persist into memory under `hermes_tasks`
-    const store = await loadMemoryStore();
-    store.hermes_tasks = store.hermes_tasks || [];
-    store.hermes_tasks.push(task);
-    await saveMemoryStore(store);
-
+    const task = persistence.assignHermesTask(body || {});
     return jsonResponse(res, 200, { ok: true, task });
   } catch (e) {
     return jsonResponse(res, 500, { error: e.message });
@@ -204,13 +171,55 @@ async function handleHermesDelete(req, res) {
   try {
     const { taskId } = await readBody(req);
     if (!taskId) return jsonResponse(res, 400, { error: 'Missing taskId' });
-    const store = await loadMemoryStore();
-    if (!Array.isArray(store.hermes_tasks)) return jsonResponse(res, 404, { error: 'No hermes_tasks' });
-    const before = store.hermes_tasks.length;
-    store.hermes_tasks = store.hermes_tasks.filter(t => t.id !== taskId);
-    const after = store.hermes_tasks.length;
-    await saveMemoryStore(store);
-    return jsonResponse(res, 200, { ok: true, removed: before - after });
+    const pending = persistence.getPendingHermesTasks();
+    if (!pending.length) return jsonResponse(res, 404, { error: 'No hermes_tasks' });
+    const removed = persistence.deleteHermesTask(taskId);
+    return jsonResponse(res, 200, { ok: true, removed });
+  } catch (e) {
+    return jsonResponse(res, 500, { error: e.message });
+  }
+}
+
+async function handleStateBootstrap(req, res) {
+  try {
+    const body = await readBody(req);
+    const agentIds = Array.isArray(body.agentIds) ? body.agentIds : [];
+    return jsonResponse(res, 200, persistence.getBootstrap(agentIds));
+  } catch (e) {
+    return jsonResponse(res, 500, { error: e.message });
+  }
+}
+
+async function handleStateTaskUpsert(req, res) {
+  try {
+    const task = await readBody(req);
+    if (!task?.id) return jsonResponse(res, 400, { error: 'Missing task id' });
+    const stored = persistence.upsertTask(task);
+    return jsonResponse(res, 200, { ok: true, task: stored });
+  } catch (e) {
+    return jsonResponse(res, 500, { error: e.message });
+  }
+}
+
+async function handleStateTaskTransition(req, res) {
+  try {
+    const { taskId, status, agentId, completedAt } = await readBody(req);
+    if (!taskId) return jsonResponse(res, 400, { error: 'Missing taskId' });
+    if (!status) return jsonResponse(res, 400, { error: 'Missing status' });
+    const task = persistence.transitionTask({ taskId, status, agentId, completedAt });
+    return jsonResponse(res, 200, { ok: true, task });
+  } catch (e) {
+    const status = /Task not found/.test(e.message) ? 404 : 500;
+    return jsonResponse(res, status, { error: e.message });
+  }
+}
+
+async function handleStateTaskDelete(req, res) {
+  try {
+    const { taskId } = await readBody(req);
+    if (!taskId) return jsonResponse(res, 400, { error: 'Missing taskId' });
+    const removed = persistence.deleteTask(taskId);
+    return jsonResponse(res, 200, { ok: true, removed });
   } catch (e) {
     return jsonResponse(res, 500, { error: e.message });
   }
@@ -776,6 +785,26 @@ const server = createServer((req, res) => {
     return;
   }
 
+  if (req.method === 'POST' && req.url === '/api/state/bootstrap') {
+    handleStateBootstrap(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/state/task/upsert') {
+    handleStateTaskUpsert(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/state/task/transition') {
+    handleStateTaskTransition(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/state/task/delete') {
+    handleStateTaskDelete(req, res);
+    return;
+  }
+
   if (req.method === 'POST' && req.url === '/api/context/clear') {
     handleContextClear(req, res);
     return;
@@ -818,8 +847,7 @@ const server = createServer((req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
     (async () => {
       try {
-        const store = await loadMemoryStore();
-        const memKeys = Object.keys(store || {}).length;
+        const memKeys = persistence.countMemoryKeys();
         const uptime = process.uptime();
         jsonResponse(res, 200, { ok: true, uptime_seconds: Math.floor(uptime), memory_keys: memKeys });
       } catch (e) {
@@ -847,6 +875,7 @@ function shutdown(code = 0) {
   try {
     // stop accepting new connections
     server.close(() => process.exit(code));
+    persistence.close();
 
     // Force-destroy any open sockets to avoid libuv double-close races on Windows
     for (const s of connections) {

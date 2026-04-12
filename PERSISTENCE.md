@@ -1,27 +1,77 @@
-# Persistence & Migration Guide
+# Persistence Guide
 
-This project uses a simple file-backed JSON `memories.json` for local development. It's intentionally lightweight and not suitable for production. Below are migration options and considerations.
+Agent Bar Hangout now uses a local SQLite database for durable task history and memory in both runtimes:
 
-Options:
+- Web/dev server: `better-sqlite3`
+- Tauri desktop: `rusqlite` with bundled SQLite
 
-- SQLite (production-ready): use `better-sqlite3` or `sqlite3` for local file-backed DB. Note: `better-sqlite3` is a native module and requires a compatible C/C++ toolchain on Windows and CI. Use Docker or devcontainers to ensure reproducible builds.
+## What Is Stored
 
-- PostgreSQL / Managed DB: Use Postgres for durable multi-process access. Add migrations (e.g., using `knex` or `sequelize`).
+- Generic memory entries from `/api/memory/*`
+- Pending Hermes assignments
+- Active tasks
+- Completed task history
+- Migration metadata for one-time legacy imports
 
-- sql.js (WASM): If you need a zero-native-deps SQLite alternative (browser-friendly), `sql.js` is a WebAssembly build of SQLite.
+## Database Shape
 
-- Simple key-value stores: Redis for ephemeral memory with persistence via RDB/AOF.
+- `memory_entries`
+  - `key TEXT PRIMARY KEY`
+  - `value_json TEXT NOT NULL`
+  - `updated_at TEXT NOT NULL`
+- `tasks`
+  - `id TEXT PRIMARY KEY`
+  - `source TEXT NOT NULL`
+  - `agent_id TEXT`
+  - `title TEXT NOT NULL`
+  - `instructions TEXT NOT NULL`
+  - `eta_minutes INTEGER`
+  - `mcp_ids_json TEXT NOT NULL`
+  - `metadata_json TEXT NOT NULL`
+  - `status TEXT NOT NULL`
+  - `created_at TEXT NOT NULL`
+  - `updated_at TEXT NOT NULL`
+  - `received_at TEXT`
+  - `completed_at TEXT`
+- `migration_records`
+  - Tracks import status for legacy `memories.json`
 
-Concurrency:
+## Compatibility
 
-- File-backed writes should be serialized — the current implementation writes atomically via temp file + rename, but concurrent processes may overwrite each other's updates. Use DB transactions for concurrent access.
+- `/api/memory/*` semantics remain available for existing integrations.
+- `/api/hermes/assign` and `/api/hermes/delete` still work.
+- Pending Hermes tasks are still exposed through the compatibility key `hermes_tasks`.
+- New state endpoints power UI bootstrap and durable task transitions:
+  - `POST /api/state/bootstrap`
+  - `POST /api/state/task/upsert`
+  - `POST /api/state/task/transition`
+  - `POST /api/state/task/delete`
 
-Schema ideas:
+The Tauri runtime mirrors the same behavior through invoke commands:
 
-- `memories` table: `key TEXT PRIMARY KEY, value JSONB, updated_at TIMESTAMP`
-- `hermes_tasks` table: `id TEXT PRIMARY KEY, title TEXT, instructions TEXT, assignee TEXT, metadata JSONB, status TEXT, created_at TIMESTAMP`
+- `persistence_bootstrap`
+- `persistence_task_upsert`
+- `persistence_task_transition`
+- `persistence_task_delete`
+- `memory_get`
+- `memory_set`
+- `memory_keys`
+- `memory_delete`
+- `memory_clear`
+- `hermes_assign`
+- `hermes_delete`
 
-Migration notes:
+## Legacy Import
 
-- To migrate from `memories.json` to SQLite/Postgres, write a small migration script that reads the JSON file and inserts rows into the target DB.
-- Add backups before performing migrations in production.
+On first startup, the persistence layer checks for `memories.json` and imports:
+
+- regular keys into `memory_entries`
+- `hermes_tasks` into pending durable task records
+
+Import status is recorded in `migration_records`. If import fails, the failure is recorded and the app continues using the database so users still get actionable errors instead of a hard startup crash.
+
+## Test Notes
+
+- `npm run coverage:unit` exercises the server endpoints plus direct SQLite persistence tests.
+- `cargo test --manifest-path src-tauri/Cargo.toml` covers the desktop persistence module.
+- Browser reload behavior is verified with Playwright using an isolated temp database.
