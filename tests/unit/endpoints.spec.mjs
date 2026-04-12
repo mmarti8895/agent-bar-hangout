@@ -172,7 +172,7 @@ async function run() {
   assert.strictEqual(terminalTooLong.status, 400);
   assert.match(terminalTooLong.data.error, /Command too long/);
 
-  const terminalOk = await postJson('/api/terminal', { command: 'Write-Output "coverage-ok"' });
+  const terminalOk = await postJson('/api/terminal', { command: 'echo coverage-ok' });
   assert.strictEqual(terminalOk.status, 200);
   assert.strictEqual(terminalOk.data.exit_code, 0);
   assert.match(terminalOk.data.stdout, /coverage-ok/);
