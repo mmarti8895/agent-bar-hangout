@@ -12,7 +12,7 @@
     "test": "npx playwright test",
     "lint": "echo 'No linter configured'",
     "format": "echo 'No formatter configured'",
-    "prepare": "node -e \"try{require('child_process').execSync('npx husky install',{stdio:'inherit'})}catch(e){}\"",
+    "prepare": "echo 'No prepare steps'",
     "test:headed": "npx playwright test --headed",
     "test:ui": "npx playwright test --ui",
     "coverage:unit": "c8 node tests/unit/run_coverage.cjs",
@@ -23,14 +23,6 @@
     "@tauri-apps/cli": "^2.10.1"
     ,
     "c8": "^8.0.0"
-  },
-  "husky": {
-    "hooks": {
-      "pre-commit": "npx lint-staged"
-    }
-  },
-  "lint-staged": {
-    "*.js": ["eslint --fix", "git add"]
   },
   "dependencies": {
     "@tauri-apps/api": "^2.10.1",

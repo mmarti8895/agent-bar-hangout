@@ -1,0 +1,180 @@
+openapi: 3.0.3
+info:
+  title: Durable Persistence HTTP Contract
+  version: 1.0.0
+  description: >
+    Additive persistence contract for the web/dev-server runtime. Existing Hermes and memory
+    endpoints remain supported; new state endpoints support durable task restoration for the app UI.
+servers:
+  - url: http://localhost:8080
+paths:
+  /api/state/bootstrap:
+    post:
+      summary: Load durable task/history bootstrap data for the application UI
+      responses:
+        '200':
+          description: Bootstrap data returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BootstrapResponse'
+  /api/state/task/upsert:
+    post:
+      summary: Create or update a persisted task record
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PersistedTask'
+      responses:
+        '200':
+          description: Task persisted
+  /api/state/task/transition:
+    post:
+      summary: Transition a task to a new durable status
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskTransitionRequest'
+      responses:
+        '200':
+          description: Task state updated
+  /api/state/task/delete:
+    post:
+      summary: Remove a persisted task record when the workflow requires deletion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [taskId]
+              properties:
+                taskId:
+                  type: string
+      responses:
+        '200':
+          description: Task deleted
+  /api/memory/get:
+    post:
+      summary: Get a durable memory key or the full durable memory store
+      description: Existing behavior is preserved; `hermes_tasks` continues to return pending Hermes tasks.
+  /api/memory/set:
+    post:
+      summary: Set a durable memory key
+      description: Existing behavior is preserved for generic memory values.
+  /api/memory/keys:
+    post:
+      summary: List durable memory keys
+  /api/memory/delete:
+    post:
+      summary: Delete a durable memory key
+  /api/memory/clear:
+    post:
+      summary: Clear durable memory entries
+  /api/hermes/assign:
+    post:
+      summary: Accept a Hermes-style assignment and persist it as a pending durable task
+  /api/hermes/delete:
+    post:
+      summary: Delete or reject a pending Hermes task by identifier
+components:
+  schemas:
+    PersistedTask:
+      type: object
+      required:
+        - id
+        - source
+        - title
+        - instructions
+        - status
+        - createdAt
+      properties:
+        id:
+          type: string
+        source:
+          type: string
+          enum: [manual, hermes]
+        agentId:
+          type: string
+          nullable: true
+        title:
+          type: string
+        instructions:
+          type: string
+        etaMinutes:
+          type: integer
+          nullable: true
+        mcpIds:
+          type: array
+          items:
+            type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        status:
+          type: string
+          enum: [pending, in_progress, done, rejected]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        receivedAt:
+          type: string
+          format: date-time
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+    TaskTransitionRequest:
+      type: object
+      required: [taskId, status]
+      properties:
+        taskId:
+          type: string
+        status:
+          type: string
+          enum: [pending, in_progress, done, rejected]
+        agentId:
+          type: string
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+    BootstrapResponse:
+      type: object
+      required: [agents, hermesTasks]
+      properties:
+        agents:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentBootstrap'
+        hermesTasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/PersistedTask'
+        migration:
+          type: object
+          nullable: true
+          additionalProperties: true
+    AgentBootstrap:
+      type: object
+      required: [agentId, tasks, history]
+      properties:
+        agentId:
+          type: string
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/PersistedTask'
+        history:
+          type: array
+          items:
+            $ref: '#/components/schemas/PersistedTask'
