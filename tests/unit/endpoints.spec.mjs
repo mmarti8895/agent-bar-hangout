@@ -68,7 +68,8 @@ async function run() {
   const health = await request('/health');
   assert.strictEqual(health.status, 200);
   assert.strictEqual(health.data.ok, true);
-  assert.strictEqual(health.data.memory_keys, 0);
+  assert.strictEqual(typeof health.data.memory_keys, 'number');
+  assert.ok(health.data.memory_keys >= 0);
 
   const optionsResp = await request('/api/chat', {
     method: 'OPTIONS',
@@ -172,7 +173,7 @@ async function run() {
   assert.strictEqual(terminalTooLong.status, 400);
   assert.match(terminalTooLong.data.error, /Command too long/);
 
-  const terminalOk = await postJson('/api/terminal', { command: 'Write-Output "coverage-ok"' });
+  const terminalOk = await postJson('/api/terminal', { command: 'echo coverage-ok' });
   assert.strictEqual(terminalOk.status, 200);
   assert.strictEqual(terminalOk.data.exit_code, 0);
   assert.match(terminalOk.data.stdout, /coverage-ok/);
@@ -238,6 +239,48 @@ async function run() {
   const hermesDeleteExisting = await postJson('/api/hermes/delete', { taskId: 'hermes-coverage' });
   assert.strictEqual(hermesDeleteExisting.status, 200);
   assert.strictEqual(hermesDeleteExisting.data.removed, 1);
+
+  const bootstrapEmpty = await postJson('/api/state/bootstrap', { agentIds: ['nova'] });
+  assert.strictEqual(bootstrapEmpty.status, 200);
+  assert.strictEqual(bootstrapEmpty.data.agents.length, 1);
+  assert.strictEqual(bootstrapEmpty.data.agents[0].agentId, 'nova');
+
+  const upsertTask = await postJson('/api/state/task/upsert', {
+    id: 'durable-task',
+    source: 'manual',
+    agentId: 'nova',
+    title: 'Durable task',
+    instructions: 'Persist through bootstrap',
+    etaMinutes: 7,
+    mcpIds: ['filesystem'],
+    metadata: { source: 'coverage' },
+    status: 'in-progress',
+    createdAt: new Date().toISOString(),
+  });
+  assert.strictEqual(upsertTask.status, 200);
+  assert.strictEqual(upsertTask.data.task.id, 'durable-task');
+
+  const bootstrapActive = await postJson('/api/state/bootstrap', { agentIds: ['nova'] });
+  assert.strictEqual(bootstrapActive.status, 200);
+  assert.strictEqual(bootstrapActive.data.agents[0].tasks.length, 1);
+  assert.strictEqual(bootstrapActive.data.agents[0].tasks[0].status, 'in_progress');
+
+  const transitionTask = await postJson('/api/state/task/transition', {
+    taskId: 'durable-task',
+    status: 'done',
+    agentId: 'nova',
+  });
+  assert.strictEqual(transitionTask.status, 200);
+  assert.strictEqual(transitionTask.data.task.status, 'done');
+
+  const bootstrapDone = await postJson('/api/state/bootstrap', { agentIds: ['nova'] });
+  assert.strictEqual(bootstrapDone.status, 200);
+  assert.strictEqual(bootstrapDone.data.agents[0].tasks.length, 0);
+  assert.strictEqual(bootstrapDone.data.agents[0].history.length, 1);
+
+  const deleteTask = await postJson('/api/state/task/delete', { taskId: 'durable-task' });
+  assert.strictEqual(deleteTask.status, 200);
+  assert.strictEqual(deleteTask.data.removed, 1);
 
   const clearMemory = await postJson('/api/memory/clear', {});
   assert.strictEqual(clearMemory.status, 200);

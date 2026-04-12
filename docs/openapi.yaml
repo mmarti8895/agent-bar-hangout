@@ -1,14 +1,75 @@
 openapi: 3.0.3
 info:
   title: Agent Bar Hangout - Dev Server API
-  version: 1.0.0
-  description: Minimal API used for local development (memory store, Hermes compatibility, LLM proxy)
+  version: 1.1.0
+  description: Durable task, memory, and Hermes compatibility API for local development.
 servers:
   - url: http://localhost:8080
 paths:
+  /api/state/bootstrap:
+    post:
+      summary: Load durable task and Hermes bootstrap state
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agentIds:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Bootstrap payload returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BootstrapResponse'
+  /api/state/task/upsert:
+    post:
+      summary: Create or update a durable task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PersistedTask'
+      responses:
+        '200':
+          description: Task persisted
+  /api/state/task/transition:
+    post:
+      summary: Transition a durable task to a new state
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskTransitionRequest'
+      responses:
+        '200':
+          description: Task updated
+  /api/state/task/delete:
+    post:
+      summary: Delete a durable task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [taskId]
+              properties:
+                taskId:
+                  type: string
+      responses:
+        '200':
+          description: Task deleted
   /api/hermes/assign:
     post:
-      summary: Accept a Hermes-style assignment and store it in memory
+      summary: Accept a Hermes-style assignment and persist it durably
       requestBody:
         required: true
         content:
@@ -18,13 +79,25 @@ paths:
       responses:
         '200':
           description: Assignment accepted
-          content:
-            application/json:
-              schema:
-                type: object
+  /api/hermes/delete:
+    post:
+      summary: Delete a pending Hermes task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [taskId]
+              properties:
+                taskId:
+                  type: string
+      responses:
+        '200':
+          description: Task removed
   /api/memory/get:
     post:
-      summary: Get memory store key or full store
+      summary: Get a durable memory key or full durable memory store
       requestBody:
         required: false
         content:
@@ -39,7 +112,7 @@ paths:
           description: Memory returned
   /api/memory/set:
     post:
-      summary: Set memory key
+      summary: Set a durable memory key
       requestBody:
         required: true
         content:
@@ -52,43 +125,131 @@ paths:
                   type: string
                 value:
                   nullable: true
-                  description: Arbitrary JSON value to store.
       responses:
         '200':
           description: Key stored
-  /api/chat:
+  /api/memory/keys:
     post:
-      summary: LLM proxy endpoint
+      summary: List durable memory keys
+      responses:
+        '200':
+          description: Keys returned
+  /api/memory/delete:
+    post:
+      summary: Delete a durable memory key
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required: [key]
               properties:
-                prompt:
-                  type: string
-                agentId:
-                  type: string
-                vendor:
+                key:
                   type: string
       responses:
         '200':
-          description: LLM answer
-  /api/terminal:
+          description: Key removed
+  /api/memory/clear:
     post:
-      summary: Execute a terminal command (dev only)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                command:
-                  type: string
-                shell:
-                  type: string
+      summary: Clear durable memory entries
       responses:
         '200':
-          description: Command executed
+          description: Memory cleared
+components:
+  schemas:
+    PersistedTask:
+      type: object
+      required:
+        - id
+        - source
+        - title
+        - instructions
+        - status
+        - createdAt
+      properties:
+        id:
+          type: string
+        source:
+          type: string
+          enum: [manual, hermes]
+        agentId:
+          type: string
+          nullable: true
+        title:
+          type: string
+        instructions:
+          type: string
+        etaMinutes:
+          type: integer
+          nullable: true
+        mcpIds:
+          type: array
+          items:
+            type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        status:
+          type: string
+          enum: [pending, in_progress, done, rejected]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        receivedAt:
+          type: string
+          format: date-time
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+    TaskTransitionRequest:
+      type: object
+      required: [taskId, status]
+      properties:
+        taskId:
+          type: string
+        status:
+          type: string
+          enum: [pending, in_progress, done, rejected]
+        agentId:
+          type: string
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+    AgentBootstrap:
+      type: object
+      required: [agentId, tasks, history]
+      properties:
+        agentId:
+          type: string
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/PersistedTask'
+        history:
+          type: array
+          items:
+            $ref: '#/components/schemas/PersistedTask'
+    BootstrapResponse:
+      type: object
+      required: [agents, hermesTasks]
+      properties:
+        agents:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentBootstrap'
+        hermesTasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/PersistedTask'
+        migration:
+          type: object
+          nullable: true
+          additionalProperties: true

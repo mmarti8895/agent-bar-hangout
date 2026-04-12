@@ -16,9 +16,6 @@ const dom = {
   taskInstructions: document.getElementById('taskInstructions'),
   taskEta: document.getElementById('taskEta'),
   taskList: document.getElementById('taskList'),
-  historyList: document.getElementById('historyList'),
-  downloadRunHistory: document.getElementById('downloadRunHistory'),
-  clearRunHistory: document.getElementById('clearRunHistory'),
   selectedName: document.getElementById('selectedAgentName'),
   selectedRole: document.getElementById('selectedAgentRole'),
   selectedMood: document.getElementById('selectedAgentMood'),
@@ -37,6 +34,7 @@ const dom = {
   agentOutputPane: document.getElementById('agentOutputPane'),
   agentOutputLabel: document.getElementById('agentOutputLabel'),
   clearAgentOutput: document.getElementById('clearAgentOutput'),
+  downloadLogBtn: document.getElementById('downloadLogBtn'),
   clearLogBtn: document.getElementById('clearLogBtn'),
   mcpConfigBtn: document.getElementById('mcpConfigBtn'),
   mcpConfigModal: document.getElementById('mcpConfigModal'),
@@ -50,10 +48,6 @@ const dom = {
   mcpNewConfigFields: document.getElementById('mcpNewConfigFields'),
 };
 const stageElement = document.querySelector('.bar-stage');
-
-const RUN_HISTORY_STORAGE_KEY = 'agentBarHangout_runHistory';
-const RUN_HISTORY_LIMIT = 10;
-const RUN_HISTORY_FIELD_MAX_LEN = 500;
 
 /* ───────── Agent definitions ───────── */
 const baseAgents = [
@@ -89,7 +83,7 @@ const state = {
   hoveredAgentId: null,
 };
 
-let runHistory = [];
+const activityLogEntries = [];
 
 // Expose for E2E testing
 window.__agentBarState = state;
@@ -105,6 +99,136 @@ function clearServerContext(agentId) {
       body: JSON.stringify({ agentId }),
     }).catch(() => {}); // fire-and-forget
   }
+}
+
+function toUiTaskStatus(status) {
+  if (status === 'in_progress') return 'in-progress';
+  return status || 'in-progress';
+}
+
+function toPersistedTaskStatus(status) {
+  if (status === 'in-progress') return 'in_progress';
+  return status || 'in_progress';
+}
+
+function hydrateTask(task) {
+  const mcpIds = Array.isArray(task?.mcpIds) ? task.mcpIds : [];
+  return {
+    ...task,
+    label: task?.label || task?.title || 'Untitled Task',
+    title: task?.title || task?.label || 'Untitled Task',
+    instructions: task?.instructions || '',
+    etaMinutes: task?.etaMinutes ?? null,
+    mcpIds,
+    metadata: task?.metadata || {},
+    source: task?.source || 'manual',
+    status: toUiTaskStatus(task?.status),
+    createdAt: task?.createdAt || new Date().toISOString(),
+    updatedAt: task?.updatedAt || task?.createdAt || new Date().toISOString(),
+    receivedAt: task?.receivedAt ?? null,
+    completedAt: task?.completedAt ?? null,
+    log: Array.isArray(task?.log) ? task.log : [],
+    totalSteps: task?.totalSteps || (2 + mcpIds.length * 2 + 2),
+  };
+}
+
+function serializeTaskForPersistence(agentId, task) {
+  return {
+    id: task.id,
+    source: task.source || 'manual',
+    agentId,
+    title: task.title || task.label || 'Untitled Task',
+    instructions: task.instructions || '',
+    etaMinutes: task.etaMinutes ?? null,
+    mcpIds: Array.isArray(task.mcpIds) ? task.mcpIds : [],
+    metadata: task.metadata || {},
+    status: toPersistedTaskStatus(task.status),
+    createdAt: task.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    receivedAt: task.receivedAt ?? null,
+    completedAt: task.completedAt ?? null,
+  };
+}
+
+async function postJson(path, body = {}) {
+  const resp = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  let data = {};
+  try {
+    data = await resp.json();
+  } catch {
+    data = {};
+  }
+  if (!resp.ok) {
+    throw new Error(data.error || ('Request failed: ' + path));
+  }
+  return data;
+}
+
+const persistenceGateway = {
+  async bootstrap(agentIds) {
+    if (IS_TAURI) {
+      return tauriInvoke('persistence_bootstrap', { agentIds });
+    }
+    return postJson('/api/state/bootstrap', { agentIds });
+  },
+  async upsertTask(task) {
+    if (IS_TAURI) {
+      return tauriInvoke('persistence_task_upsert', { task });
+    }
+    return postJson('/api/state/task/upsert', task);
+  },
+  async transitionTask(taskId, status, agentId, completedAt = null) {
+    const payload = { taskId, status, agentId, completedAt };
+    if (IS_TAURI) {
+      return tauriInvoke('persistence_task_transition', payload);
+    }
+    return postJson('/api/state/task/transition', payload);
+  },
+  async deleteTask(taskId) {
+    if (IS_TAURI) {
+      return tauriInvoke('persistence_task_delete', { taskId });
+    }
+    return postJson('/api/state/task/delete', { taskId });
+  },
+  async getHermesTasks() {
+    if (IS_TAURI) {
+      const result = await tauriInvoke('memory_get', { key: 'hermes_tasks' });
+      return result?.value || [];
+    }
+    const result = await postJson('/api/memory/get', { key: 'hermes_tasks' });
+    return result.value || [];
+  },
+  async deleteHermesTask(taskId) {
+    if (IS_TAURI) {
+      return tauriInvoke('hermes_delete', { taskId });
+    }
+    return postJson('/api/hermes/delete', { taskId });
+  },
+};
+
+function syncAgentTaskState() {
+  state.agents.forEach((agent) => {
+    agent.status = agent.tasks.length ? 'busy' : 'idle';
+    if (agent.tasks.length && agent.walkState === 'at-bar') {
+      agent.walkState = 'away';
+      agent.walkProgress = 0;
+      if (agent.beerMesh) agent.beerMesh.visible = false;
+    }
+  });
+}
+
+function applyBootstrapState(bootstrap) {
+  const byId = new Map((bootstrap?.agents || []).map((agent) => [agent.agentId, agent]));
+  state.agents.forEach((agent) => {
+    const restored = byId.get(agent.id);
+    agent.tasks = (restored?.tasks || []).map(hydrateTask);
+    agent.history = (restored?.history || []).map(hydrateTask);
+  });
+  syncAgentTaskState();
 }
 
 /* ───────── MCP Adapter Registry ───────── */
@@ -154,14 +278,6 @@ const defaultMcpAdapters = [
       },
     ],
     // Dynamic fields rendered per vendor — see LLM_VENDOR_FIELDS below
-    configValues: {},
-  },
-  {
-    id: 'weather', name: 'Weather', icon: '🌦️',
-    description: 'Live current weather and short forecast via wttr.in',
-    tools: ['get_weather', 'compare_locations', 'summarize_forecast'],
-    isDefault: true,
-    configFields: [],
     configValues: {},
   },
   {
@@ -347,6 +463,26 @@ const defaultMcpAdapters = [
 
 const MCP_STORAGE_KEY = 'agentBarHangout_mcpAdapters';
 const MCP_CRYPTO_KEY_STORE = 'agentBarHangout_ck';
+const REMOVED_MCP_IDS = new Set(['weather']);
+const LEGACY_MCP_ID_ALIASES = {
+  'directory-reader': 'filesystem',
+  'directory_reader': 'filesystem',
+  directoryreader: 'filesystem',
+};
+
+function normalizeMcpAdapterId(id) {
+  const raw = String(id || '').trim();
+  if (!raw) return '';
+  return LEGACY_MCP_ID_ALIASES[raw] || raw;
+}
+
+function normalizeSavedAdapter(rawAdapter) {
+  if (!rawAdapter || typeof rawAdapter !== 'object') return null;
+  const normalizedId = normalizeMcpAdapterId(rawAdapter.id);
+  if (!normalizedId) return null;
+  if (REMOVED_MCP_IDS.has(normalizedId)) return null;
+  return { ...rawAdapter, id: normalizedId };
+}
 
 /* ───────── Credential encryption (AES-256-GCM via Web Crypto) ───────── */
 /* In Tauri mode, credentials are stored in OS keyring via vault commands.
@@ -412,11 +548,21 @@ async function loadMcpAdapters() {
       let parsed = null;
       if (saved) {
         try { parsed = JSON.parse(saved); } catch { parsed = null; }
-        if (!Array.isArray(parsed)) parsed = null;
+        if (!Array.isArray(parsed)) {
+          parsed = null;
+        } else {
+          parsed = parsed
+            .map(normalizeSavedAdapter)
+            .filter(Boolean);
+        }
       }
       const merged = defaultMcpAdapters.map((def) => {
         const s = parsed ? parsed.find(p => p.id === def.id) : null;
-        return { ...def, configValues: s ? { ...(def.configValues || {}), ...(s.configValues || {}) } : { ...(def.configValues || {}) } };
+        return {
+          ...def,
+          enabled: true,
+          configValues: s ? { ...(def.configValues || {}), ...(s.configValues || {}) } : { ...(def.configValues || {}) },
+        };
       });
       if (parsed) {
         const defaultIds = new Set(defaultMcpAdapters.map(d => d.id));
@@ -439,7 +585,12 @@ async function loadMcpAdapters() {
   try {
     const saved = localStorage.getItem(MCP_STORAGE_KEY);
     if (saved) {
-      const parsed = await decryptData(saved);
+      let parsed = await decryptData(saved);
+      if (Array.isArray(parsed)) {
+        parsed = parsed
+          .map(normalizeSavedAdapter)
+          .filter(Boolean);
+      }
       if (Array.isArray(parsed) && parsed.length) {
         const savedById = new Map(parsed.map((s) => [s.id, s]));
 
@@ -448,6 +599,7 @@ async function loadMcpAdapters() {
           const s = savedById.get(def.id);
           return {
             ...def,
+            enabled: true,
             configValues: s ? { ...(def.configValues || {}), ...(s.configValues || {}) } : { ...(def.configValues || {}) },
           };
         });
@@ -1194,7 +1346,6 @@ function renderSidebar() {
     dom.selectedMood.textContent = 'Mood —';
     dom.selectedStatus.textContent = 'Status —';
     renderTaskList(dom.taskList, [], 'Select an agent to assign work.', true);
-    renderRunHistory();
     dom.activeSummary.textContent = '0 tasks';
     return;
   }
@@ -1204,33 +1355,7 @@ function renderSidebar() {
   const statusLabel = agent.tasks.length ? 'Busy' : 'Idle';
   dom.selectedStatus.textContent = 'Status ' + statusLabel;
   renderTaskList(dom.taskList, agent.tasks, 'No active tasks.', true);
-  renderRunHistory();
   dom.activeSummary.textContent = agent.tasks.length ? agent.tasks.length + ' task(s)' : 'No active tasks';
-}
-
-function loadRunHistory() {
-  try {
-    const raw = localStorage.getItem(RUN_HISTORY_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    const trimmed = parsed.slice(0, RUN_HISTORY_LIMIT);
-    if (trimmed.length !== parsed.length) {
-      localStorage.setItem(RUN_HISTORY_STORAGE_KEY, JSON.stringify(trimmed));
-    }
-    return trimmed;
-  } catch {
-    return [];
-  }
-}
-
-function saveRunHistory() {
-  const trimmedHistory = runHistory.slice(0, RUN_HISTORY_LIMIT);
-  try {
-    localStorage.setItem(RUN_HISTORY_STORAGE_KEY, JSON.stringify(trimmedHistory));
-  } catch {
-    // Ignore storage write failures so task completion can proceed.
-  }
 }
 
 function formatDownloadTimestamp(date) {
@@ -1243,106 +1368,40 @@ function formatDownloadTimestamp(date) {
     pad(date.getSeconds());
 }
 
-function renderRunHistory() {
-  if (!dom.historyList) return;
-  dom.historyList.innerHTML = '';
-  if (!runHistory.length) {
-    const emptyItem = document.createElement('li');
-    emptyItem.className = 'empty';
-    emptyItem.textContent = 'No recent runs yet.';
-    dom.historyList.appendChild(emptyItem);
+async function downloadActivityLog() {
+  if (!activityLogEntries.length) {
+    pushToast('No activity log to download yet.');
     return;
   }
 
-  runHistory.forEach((run) => {
-    const item = document.createElement('li');
-    item.className = 'task-card';
+  const payload = JSON.stringify(activityLogEntries, null, 2);
 
-    const meta = document.createElement('div');
-    meta.className = 'task-meta';
-
-    const title = document.createElement('strong');
-    title.textContent = run.agentName + ' — ' + run.label;
-
-    const details = document.createElement('span');
-    details.className = 'subtle';
-    const toolsText = run.mcpNames && run.mcpNames.length ? ' • ' + run.mcpNames.join(', ') : '';
-    details.textContent = (run.instructions || 'No instructions') + toolsText;
-
-    const stamp = document.createElement('span');
-    stamp.className = 'eyebrow';
-    const completedAt = run.completedAt;
-    const hasValidCompletedAt = completedAt instanceof Date
-      ? !Number.isNaN(completedAt.getTime())
-      : !!completedAt && !Number.isNaN(new Date(completedAt).getTime());
-    stamp.textContent = hasValidCompletedAt
-      ? 'Run completed ' + formatIsoTime(completedAt)
-      : 'Run completed —';
-
-    meta.appendChild(title);
-    meta.appendChild(details);
-    meta.appendChild(stamp);
-
-    item.appendChild(meta);
-    dom.historyList.appendChild(item);
-  });
-}
-
-function buildRunRecord(agent, task) {
-  const mcpNames = (task.mcpIds || []).map((id) => {
-    const adapter = mcpAdapters.find((m) => m.id === id);
-    return adapter ? adapter.name : id;
-  });
-  const resultEntry = [...(task.log || [])].reverse().find((entry) => entry.type === 'result');
-  const rawInstructions = task.instructions || '';
-  const rawResult = resultEntry ? resultEntry.message : '';
-  return {
-    id: task.id,
-    agentId: agent.id,
-    agentName: agent.name,
-    label: task.label,
-    instructions: rawInstructions.length > RUN_HISTORY_FIELD_MAX_LEN
-      ? rawInstructions.slice(0, RUN_HISTORY_FIELD_MAX_LEN) + '…'
-      : rawInstructions,
-    mcpIds: [...(task.mcpIds || [])],
-    mcpNames,
-    etaMinutes: task.etaMinutes || null,
-    createdAt: task.createdAt,
-    completedAt: task.completedAt,
-    result: rawResult.length > RUN_HISTORY_FIELD_MAX_LEN
-      ? rawResult.slice(0, RUN_HISTORY_FIELD_MAX_LEN) + '…'
-      : rawResult,
-    // log is intentionally omitted to avoid persisting potentially sensitive tool outputs
-  };
-}
-
-function persistRun(agent, task) {
-  runHistory.unshift(buildRunRecord(agent, task));
-  runHistory = runHistory.slice(0, RUN_HISTORY_LIMIT);
-  saveRunHistory();
-  renderRunHistory();
-}
-
-function downloadRunHistory() {
-  const blob = new Blob([JSON.stringify(runHistory, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = 'agent_runs_' + formatDownloadTimestamp(new Date()) + '.json';
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
-function clearRunHistory() {
-  runHistory = [];
   try {
-    localStorage.removeItem(RUN_HISTORY_STORAGE_KEY);
-  } catch {
-    // Ignore storage failures.
+    const blob = new Blob([payload], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'activity_log_' + formatDownloadTimestamp(new Date()) + '.json';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    return;
+  } catch (_) {
+    // Continue to fallback for environments that block blob-based downloads.
   }
-  renderRunHistory();
+
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(payload);
+      pushToast('Download unavailable here. Activity log copied to clipboard.');
+      return;
+    } catch {
+      // Fall through to final toast.
+    }
+  }
+
+  pushToast('Could not export activity log in this environment.');
 }
 
 function renderTaskList(listElement, tasks, emptyMessage, showActions) {
@@ -1494,7 +1553,7 @@ function getSelectedMcpIds() {
   return Array.from(checked).map((cb) => cb.value);
 }
 
-function handleAssignSubmit(event) {
+async function handleAssignSubmit(event) {
   event.preventDefault();
   const agent = getSelectedAgent();
   if (!agent) {
@@ -1510,16 +1569,17 @@ function handleAssignSubmit(event) {
   }
   const mcpIds = getSelectedMcpIds();
   const etaMinutes = etaRaw ? Math.max(1, Math.min(240, Number(etaRaw))) : null;
-  addTaskToAgent(agent.id, { title, instructions, etaMinutes, mcpIds });
+  const created = await addTaskToAgent(agent.id, { title, instructions, etaMinutes, mcpIds });
+  if (!created) return;
   dom.assignForm.reset();
   // Reset checkboxes with AI Search checked by default
   renderMcpCheckboxes();
   dom.taskTitle.focus();
 }
 
-function addTaskToAgent(agentId, payload) {
+async function addTaskToAgent(agentId, payload) {
   const agent = state.agents.find((a) => a.id === agentId);
-  if (!agent) return;
+  if (!agent) return null;
   // Clear server context if switching to a different agent
   const lastMemAgent = state._lastTaskAgentId;
   if (lastMemAgent && lastMemAgent !== agentId) {
@@ -1528,20 +1588,32 @@ function addTaskToAgent(agentId, payload) {
   state._lastTaskAgentId = agentId;
 
   const mcpIds = payload.mcpIds || [];
-  const task = {
-    id: 'task-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 999),
+  const task = hydrateTask({
+    id: payload.id || ('task-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 999)),
+    source: payload.source || 'manual',
     label: payload.title,
     title: payload.title,
     instructions: payload.instructions,
     etaMinutes: payload.etaMinutes,
-    mcpIds: mcpIds,
-    status: 'in-progress',
-    createdAt: new Date().toISOString(),
-    completedAt: null,
-    log: [],
-    totalSteps: 2 + mcpIds.length * 2 + 2,
-  };
-  agent.tasks.push(task);
+    mcpIds,
+    metadata: payload.metadata || {},
+    status: payload.status || 'in-progress',
+    createdAt: payload.createdAt || new Date().toISOString(),
+    receivedAt: payload.receivedAt ?? null,
+    completedAt: payload.completedAt ?? null,
+    log: payload.log || [],
+  });
+
+  try {
+    await persistenceGateway.upsertTask(serializeTaskForPersistence(agent.id, task));
+  } catch (error) {
+    pushToast('Could not save "' + task.label + '" for ' + agent.name + '.');
+    return null;
+  }
+
+  const existingIndex = agent.tasks.findIndex((item) => item.id === task.id);
+  if (existingIndex === -1) agent.tasks.push(task);
+  else agent.tasks.splice(existingIndex, 1, task);
   agent.status = 'busy';
   // Trigger angry leave animation only if agent was at the bar
   if (agent.walkState === 'at-bar' || agent.walkState === 'sipping') {
@@ -1559,6 +1631,7 @@ function addTaskToAgent(agentId, payload) {
 
   // Start simulated execution
   runTaskExecution(agent, task);
+  return task;
 }
 
 /* ───────── Simulated MCP execution pipeline ───────── */
@@ -1637,11 +1710,12 @@ function appendToResponsePane(agentName, type, message) {
 }
 
 function appendToActivityLog(agentName, type, taskLabel, details, statusClass) {
+  const timestamp = formatTime();
   const row = document.createElement('tr');
 
   const tdTime = document.createElement('td');
   tdTime.className = 'log-time';
-  tdTime.textContent = formatTime();
+  tdTime.textContent = timestamp;
 
   const tdAgent = document.createElement('td');
   tdAgent.className = 'log-agent';
@@ -1676,6 +1750,14 @@ function appendToActivityLog(agentName, type, taskLabel, details, statusClass) {
 
   // Insert at top so newest entries are first
   dom.activityLogBody.prepend(row);
+  activityLogEntries.unshift({
+    timestamp,
+    agent: agentName,
+    type,
+    task: taskLabel || '',
+    details,
+    status: statusClass || 'status-ok',
+  });
   activityLogCount++;
   dom.logCount.textContent = activityLogCount + ' entr' + (activityLogCount === 1 ? 'y' : 'ies');
 }
@@ -1688,12 +1770,17 @@ async function runTaskExecution(agent, task) {
   appendToResponsePane(agent.name, 'system', 'Starting task: "' + task.label + '"');
   appendToActivityLog(agent.name, 'assign', task.label, 'Task assigned' + (task.mcpIds.length ? ' with ' + task.mcpIds.length + ' MCP(s)' : ''), 'status-busy');
 
-  function nextStep() {
+  async function nextStep() {
     if (stepIndex >= steps.length) return;
     // Task may have been manually completed
     if (task.status === 'done') return;
 
     const step = steps[stepIndex];
+    if (step.type === 'done') {
+      await finishTask(agent, task);
+      return;
+    }
+
     task.log.push(step);
 
     // Send results to Agent Output, everything to Response Pane & Activity Log
@@ -1707,9 +1794,6 @@ async function runTaskExecution(agent, task) {
     // Update task status based on phase
     if (step.type === 'verify') {
       task.status = 'verifying';
-    } else if (step.type === 'done') {
-      finishTask(agent, task);
-      return;
     }
 
     renderSidebar();
@@ -1717,11 +1801,15 @@ async function runTaskExecution(agent, task) {
 
     // Random delay (800-2500ms) to simulate real MCP responses
     const delay = 800 + Math.floor(Math.random() * 1700);
-    setTimeout(nextStep, delay);
+    setTimeout(() => {
+      nextStep().catch(() => {});
+    }, delay);
   }
 
   // Kick off after a short initial delay
-  setTimeout(nextStep, 600);
+  setTimeout(() => {
+    nextStep().catch(() => {});
+  }, 600);
 }
 
 async function buildExecutionSteps(agent, task) {
@@ -1819,7 +1907,9 @@ function generateMcpSimulatedOutput(adapter, taskLabel) {
       lines.push('⚡ Terminal.read_output() → OK (exit code 0)');
       break;
     }
-    case 'filesystem': {
+    case 'filesystem':
+    case 'directory-reader':
+    case 'directory_reader': {
       const root = cv.rootDir || '.';
       lines.push('📁 Filesystem.list_dir() → scanning ' + root);
       lines.push('  Found 23 files across 5 directories');
@@ -1847,12 +1937,6 @@ function generateMcpSimulatedOutput(adapter, taskLabel) {
       lines.push('🤖 AI.search() → querying LLM...');
       lines.push('  200 OK — received response, extracted 1,247 words');
       lines.push('🤖 AI.summarize() → OK');
-      break;
-    }
-    case 'weather': {
-      lines.push('🌦️ Weather.get_weather() → querying live weather source...');
-      lines.push('  wttr.in responded with current conditions and forecast data');
-      lines.push('🌦️ Weather.summarize_forecast() → OK');
       break;
     }
     case 'atlassian': {
@@ -2091,82 +2175,10 @@ async function fetchGitHubReal(cv, label) {
   }
 }
 
-/* ───────── Real Weather API helper (wttr.in) ───────── */
-function extractLocationFromQuery(query) {
-  const lower = query.toLowerCase().trim();
-
-  // Strategy 1: Look for "in/for/at/near/of" + location (most reliable)
-  const trailingNoise = /\s+(?:right now|currently|today|tonight|this week|please|thanks|thank you)[\s?.!]*$/i;
-  const prepMatch = lower.match(/(?:weather|forecast|temperature|temp|conditions)\s+(?:in|for|at|near|of)\s+(.+)/i)
-    || lower.match(/\b(?:in|for|at|near|of)\s+([a-z][\w\s,.-]+?)(?:\s*(?:weather|forecast|temperature|temp|conditions|right now|currently|today|tonight|please|thanks|\?|$))/i);
-  if (prepMatch) {
-    const loc = prepMatch[1].replace(trailingNoise, '').replace(/[?.!]+$/, '').trim();
-    if (loc.length >= 2) return loc;
-  }
-
-  // Strategy 2: Strip known noise words and see what's left
-  const noise = /\b(what(?:'?s| is| are)?|the|tell|me|get|can|you|could|show|look|up|find|fetch|check|give|please|thanks|thank|i|need|want|know|like|how|about|right now|currently|today|tonight|this week|weather|forecast|temperature|temp|conditions|current)\b/gi;
-  const cleaned = lower.replace(noise, ' ').replace(/[?.!]+/g, '').replace(/\s+/g, ' ').trim();
-  // Remove leading prepositions that survived
-  const loc2 = cleaned.replace(/^(in|for|at|of|near)\s+/i, '').trim();
-  if (loc2.length >= 2) return loc2;
-
-  return 'your location';
-}
-
-async function fetchWeatherReal(taskLabel) {
-  const location = extractLocationFromQuery(taskLabel);
-  const url = 'https://wttr.in/' + encodeURIComponent(location) + '?format=j1';
-  try {
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    const data = await resp.json();
-    const cur = data.current_condition && data.current_condition[0];
-    if (!cur) throw new Error('No weather data returned');
-    const area = (data.nearest_area && data.nearest_area[0]) || {};
-    const areaName = (area.areaName && area.areaName[0] && area.areaName[0].value) || location;
-    const region = (area.region && area.region[0] && area.region[0].value) || '';
-    const country = (area.country && area.country[0] && area.country[0].value) || '';
-    const displayLoc = areaName + (region ? ', ' + region : '') + (country ? ', ' + country : '');
-    const tempF = cur.temp_F || 'N/A';
-    const tempC = cur.temp_C || 'N/A';
-    const desc = (cur.weatherDesc && cur.weatherDesc[0] && cur.weatherDesc[0].value) || 'N/A';
-    const humidity = cur.humidity || 'N/A';
-    const windMph = cur.windspeedMiles || 'N/A';
-    const windDir = cur.winddir16Point || '';
-    const uvIndex = cur.uvIndex || 'N/A';
-    const feelsF = cur.FeelsLikeF || tempF;
-    const feelsC = cur.FeelsLikeC || tempC;
-
-    // Tomorrow forecast
-    let tomorrowStr = '';
-    if (data.weather && data.weather[1]) {
-      const tmrw = data.weather[1];
-      tomorrowStr = '\n  Tomorrow: High ' + tmrw.maxtempF + '°F, Low ' + tmrw.mintempF + '°F — ' +
-        ((tmrw.hourly && tmrw.hourly[4] && tmrw.hourly[4].weatherDesc && tmrw.hourly[4].weatherDesc[0] && tmrw.hourly[4].weatherDesc[0].value) || 'N/A');
-    }
-
-    return '📋 RESULT — Weather for ' + displayLoc + ':\n' +
-      '  Conditions: ' + desc + '\n' +
-      '  Temperature: ' + tempF + '°F (' + tempC + '°C)\n' +
-      '  Feels Like: ' + feelsF + '°F (' + feelsC + '°C)\n' +
-      '  Humidity: ' + humidity + '%\n' +
-      '  Wind: ' + windMph + ' mph ' + windDir + '\n' +
-      '  UV Index: ' + uvIndex +
-      tomorrowStr;
-  } catch (e) {
-    return '❌ Weather fetch error: ' + (e.message || e) + '\n  Could not retrieve weather for "' + location + '".';
-  }
-}
-
 async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
   switch (adapter.id) {
     case 'github': {
       return await fetchGitHubReal(cv, label);
-    }
-
-    case 'weather': {
-      return await fetchWeatherReal(taskLabel);
     }
 
     case 'terminal': {
@@ -2239,7 +2251,9 @@ async function generateMcpResult(adapter, cv, label, taskLabel, agentId) {
       }
     }
 
-    case 'filesystem': {
+    case 'filesystem':
+    case 'directory-reader':
+    case 'directory_reader': {
       const root = cv.rootDir || '.';
       if (label.includes('dir') || label.includes('ls') || label.includes('list') || label.includes('directory') || label.includes('folder') || label.includes('what')) {
         const files = ['index.html', 'app.js', 'style.css', 'DESIGN.md', 'ASSETS.md', 'ASSET_IMPORT.md', 'LICENSE', 'package.json', 'README.md', '.gitignore'];
@@ -3114,14 +3128,24 @@ function truncate(str, max) {
   return str.length > max ? str.slice(0, max - 1) + '…' : str;
 }
 
-function finishTask(agent, task) {
+async function finishTask(agent, task) {
   const index = agent.tasks.findIndex((t) => t.id === task.id);
   if (index === -1) return;
+  const completedAt = new Date().toISOString();
+  const doneMessage = 'Task complete — heading back to the bar! 🍺';
+  try {
+    await persistenceGateway.transitionTask(task.id, 'done', agent.id, completedAt);
+  } catch (error) {
+    pushToast('Could not save completion for "' + task.label + '".');
+    return;
+  }
+  task.log.push({ type: 'done', message: doneMessage });
+  appendToResponsePane(agent.name, 'done', doneMessage);
+  appendToActivityLog(agent.name, 'done', task.label, doneMessage, 'status-ok');
   agent.tasks.splice(index, 1);
   task.status = 'done';
-  task.completedAt = new Date().toISOString();
+  task.completedAt = completedAt;
   agent.history.unshift(task);
-  persistRun(agent, task);
   agent.status = agent.tasks.length ? 'busy' : 'idle';
   // Trigger walk-back + beer sip animation if no more tasks
   if (!agent.tasks.length && (agent.walkState === 'away' || agent.walkState === 'leaving')) {
@@ -3132,16 +3156,26 @@ function finishTask(agent, task) {
   pushToast(agent.name + ' finished "' + task.label + '" and is back at the bar! 🍺');
 }
 
-function markTaskDone(agentId, taskId) {
+async function markTaskDone(agentId, taskId) {
   const agent = state.agents.find((a) => a.id === agentId);
   if (!agent) return;
   const index = agent.tasks.findIndex((t) => t.id === taskId);
   if (index === -1) return;
+  const completedAt = new Date().toISOString();
+  const doneMessage = 'Task manually marked done.';
+  try {
+    await persistenceGateway.transitionTask(taskId, 'done', agent.id, completedAt);
+  } catch (error) {
+    pushToast('Could not mark "' + agent.tasks[index].label + '" as done.');
+    return;
+  }
   const [task] = agent.tasks.splice(index, 1);
+  task.log.push({ type: 'done', message: doneMessage });
+  appendToResponsePane(agent.name, 'done', doneMessage);
+  appendToActivityLog(agent.name, 'done', task.label, doneMessage, 'status-ok');
   task.status = 'done';
-  task.completedAt = new Date().toISOString();
+  task.completedAt = completedAt;
   agent.history.unshift(task);
-  persistRun(agent, task);
   agent.status = agent.tasks.length ? 'busy' : 'idle';
   // Trigger walk-back + beer sip animation if no more tasks
   if (!agent.tasks.length && (agent.walkState === 'away' || agent.walkState === 'leaving')) {
@@ -3229,6 +3263,7 @@ function updateAiQueryState() {
 }
 
 function isMcpConfigured(adapter) {
+  if (adapter.enabled === false) return false;
   const fields = adapter.configFields || [];
   const vals = adapter.configValues || {};
   // AI Search adapter: always considered configured (server-side OPENAI_API_KEY fallback)
@@ -3301,6 +3336,7 @@ function renderMcpConfigList() {
   mcpAdapters.forEach((adapter) => {
     const item = document.createElement('div');
     const ok = isMcpConfigured(adapter);
+    const explicitlyDisabled = adapter.enabled === false;
     item.className = 'mcp-config-item' + (adapter.isDefault ? ' is-default' : '') + (ok ? ' cfg-ok' : ' cfg-missing');
     item.dataset.mcpId = adapter.id;
 
@@ -3322,7 +3358,9 @@ function renderMcpConfigList() {
     cfgStatus.className = 'mcp-cfg-badge ' + (ok ? 'badge-ok' : 'badge-needs');
     const reqFields = (adapter.configFields || []).filter((f) => f.required);
     const filledFields = reqFields.filter((f) => adapter.configValues && adapter.configValues[f.key] && String(adapter.configValues[f.key]).trim());
-    cfgStatus.textContent = ok
+    cfgStatus.textContent = explicitlyDisabled
+      ? '⏸ Disabled'
+      : ok
       ? '✓ Ready'
       : '⚠ ' + filledFields.length + '/' + reqFields.length + ' fields configured';
 
@@ -3336,7 +3374,7 @@ function renderMcpConfigList() {
 
     const editBtn = document.createElement('button');
     editBtn.type = 'button';
-    editBtn.textContent = ok ? 'Edit' : '⚙ Configure';
+    editBtn.textContent = explicitlyDisabled ? 'Enable / Configure' : (ok ? 'Edit' : '⚙ Configure');
     editBtn.className = ok ? '' : 'configure-btn';
     editBtn.addEventListener('click', () => startEditMcp(adapter.id));
     actions.appendChild(editBtn);
@@ -3569,6 +3607,7 @@ function startEditMcp(mcpId) {
     adapter.icon = iconInput.value.trim() || '🔌';
     adapter.description = descInput.value.trim();
     adapter.tools = toolsInput.value.split(',').map((t) => t.trim()).filter(Boolean);
+    adapter.enabled = true;
 
     // Save config values (static + dynamic vendor fields)
     if (!adapter.configValues) adapter.configValues = {};
@@ -3622,6 +3661,7 @@ function clearMcpConfig(mcpId) {
   const adapter = mcpAdapters.find((a) => a.id === mcpId);
   if (!adapter) return;
   adapter.configValues = {};
+  adapter.enabled = true;
   vaultDeleteAdapterCreds(mcpId);
   saveMcpAdapters();
   refreshMcpUI();
@@ -3673,18 +3713,22 @@ async function init() {
   const loaded = await loadMcpAdapters();
   mcpAdapters.length = 0;
   loaded.forEach((a) => mcpAdapters.push(a));
-  runHistory = loadRunHistory();
+
+  let bootstrap = null;
+  try {
+    bootstrap = await persistenceGateway.bootstrap(baseAgents.map((agent) => agent.id));
+    applyBootstrapState(bootstrap);
+  } catch (error) {
+    bootstrap = { agents: [], hermesTasks: [], migration: { status: 'failed', details: { error: error.message } } };
+  }
 
   renderRoster();
   renderSidebar();
   renderMcpCheckboxes();
   renderMcpAdapterPanel();
   dom.assignForm.addEventListener('submit', handleAssignSubmit);
-  if (dom.downloadRunHistory) {
-    dom.downloadRunHistory.addEventListener('click', downloadRunHistory);
-  }
-  if (dom.clearRunHistory) {
-    dom.clearRunHistory.addEventListener('click', clearRunHistory);
+  if (dom.downloadLogBtn) {
+    dom.downloadLogBtn.addEventListener('click', downloadActivityLog);
   }
   dom.clearAgentOutput.addEventListener('click', () => {
     dom.agentOutputPane.innerHTML = '';
@@ -3694,12 +3738,13 @@ async function init() {
   dom.taskList.addEventListener('click', (event) => {
     const button = event.target.closest('button[data-action="done"]');
     if (!button || !state.selectedAgentId) return;
-    markTaskDone(state.selectedAgentId, button.dataset.taskId);
+    markTaskDone(state.selectedAgentId, button.dataset.taskId).catch(() => {});
   });
 
   // Activity log clear button
   dom.clearLogBtn.addEventListener('click', () => {
     dom.activityLogBody.innerHTML = '';
+    activityLogEntries.length = 0;
     activityLogCount = 0;
     dom.logCount.textContent = '0 entries';
   });
@@ -3715,6 +3760,9 @@ async function init() {
   document.addEventListener('keydown', handleKeyNavigation);
   // Start polling for incoming Hermes tasks (integration compatibility)
   startHermesPolling();
+  if (bootstrap?.migration?.status === 'failed') {
+    pushToast('Stored state could not be fully restored.');
+  }
   animate();
 }
 
@@ -3740,12 +3788,21 @@ function createHermesPanel() {
 
 const hermesPanelEl = createHermesPanel();
 
+function syncHermesPanel(tasks) {
+  const list = hermesPanelEl.querySelector('#hermesList');
+  if (!list) return;
+  list.innerHTML = '';
+  hermesSeen.clear();
+  tasks.forEach((task) => {
+    if (!task?.id) return;
+    renderHermesTask(task);
+    hermesSeen.add(task.id);
+  });
+}
+
 async function fetchHermesTasks() {
   try {
-    const resp = await fetch('/api/memory/get', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'hermes_tasks' }) });
-    if (!resp.ok) return [];
-    const data = await resp.json();
-    return data.value || [];
+    return await persistenceGateway.getHermesTasks();
   } catch (e) {
     return [];
   }
@@ -3783,10 +3840,21 @@ async function acceptHermes(task) {
   // Map assignee to agent id by name or id; fall back to currently selected agent
   let agent = state.agents.find(a => (a.id && a.id.toLowerCase()) === (String(task.assignee || '').toLowerCase()) || a.name === task.assignee);
   if (!agent) agent = state.agents.find(a => a.id === state.selectedAgentId) || state.agents[0];
-  addTaskToAgent(agent.id, { title: task.title, instructions: task.instructions, etaMinutes: task.etaMinutes, mcpIds: [] });
-  await removeHermesTaskFromServer(task.id);
+  const accepted = await addTaskToAgent(agent.id, {
+    id: task.id,
+    source: 'hermes',
+    title: task.title,
+    instructions: task.instructions,
+    etaMinutes: task.etaMinutes,
+    metadata: task.metadata || {},
+    createdAt: task.createdAt || task.receivedAt || new Date().toISOString(),
+    receivedAt: task.receivedAt || null,
+    mcpIds: [],
+  });
+  if (!accepted) return;
   const el = hermesPanelEl.querySelector('.hermes-task[data-id="' + task.id + '"]');
   if (el) el.remove();
+  hermesSeen.delete(task.id);
 }
 
 async function rejectHermes(task) {
@@ -3797,26 +3865,17 @@ async function rejectHermes(task) {
 
 async function removeHermesTaskFromServer(id) {
   try {
-    const getResp = await fetch('/api/memory/get', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'hermes_tasks' }) });
-    if (!getResp.ok) return;
-    const d = await getResp.json();
-    const arr = d.value || [];
-    const filtered = arr.filter(t => t.id !== id);
-    await fetch('/api/memory/set', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'hermes_tasks', value: filtered }) });
+    await persistenceGateway.deleteHermesTask(id);
+    hermesSeen.delete(id);
   } catch (e) {
-    // ignore
+    pushToast('Could not update Hermes task state.');
   }
 }
 
 async function startHermesPolling() {
   try {
     const tasks = await fetchHermesTasks();
-    for (const t of tasks) {
-      if (!t || !t.id) continue;
-      if (hermesSeen.has(t.id)) continue;
-      renderHermesTask(t);
-      hermesSeen.add(t.id);
-    }
+    syncHermesPanel(tasks);
   } catch (e) {
     // ignore polling errors
   }

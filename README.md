@@ -19,9 +19,9 @@ A typical-themed 3D bar where AI "worker agents" hang out waiting for task assig
 - [x] Unit tests for weather/location parsing, LLM proxy, and server API endpoints => 100% coverage for `server.js`
 - [x] Build scripts for Windows, Linux, and macOS with platform-specific installers
 - [x] Comprehensive documentation (this README, code comments, and additional markdown files for design, agents, assets, and testing)
+- [x] Durable SQLite-backed task history and memory for both web and Tauri runtimes, with Hermes compatibility preserved
 - [ ] Future: add more MCP adapters, enhance agent animations, implement real-time multi-agent interactions, and explore additional API integrations
 - [ ] Future: add user authentication and multi-user support for shared environments
-- [ ] Future: implement a persistent database for task history and memory instead of file-based storage beyond the HERMES dev API
 - [ ] Future: add more comprehensive error handling and edge case coverage in tests
 - [ ] Future: optimize performance and resource usage, especially for concurrent tasks and multi-agent interactions
 - [ ] Future: explore additional UI/UX enhancements, such as more detailed agent expressions, dynamic bar environment changes based on time of day or task load, and more interactive elements in the scene
@@ -96,8 +96,8 @@ A typical-themed 3D bar where AI "worker agents" hang out waiting for task assig
 
 - Assign tasks with title, instructions, ETA, and MCP adapter selection
 - Task progress pipeline: connect → MCP tool calls → process → result → verify → done
+- Durable SQLite-backed task history, active task restore, and Hermes queue persistence across restarts
 - Per-agent task history and working animations
-- Persisted run history for the last 10 completed runs with JSON export
 
 ### Keyboard Shortcuts
 
@@ -143,9 +143,8 @@ Custom adapters can be added through the MCP configuration modal. Adapter settin
 - Agent roster grid with status indicators
 - Task assignment form with adapter selection
 - Active tasks list with progress bars and step logs
-- Run History panel with download button for the last 10 completed runs
+- Activity Log table with JSON export
 - Agent Output pane (final results)
-- Activity Log table
 - MCP configuration modal
 - Toast notifications
 
@@ -163,7 +162,7 @@ Custom adapters can be added through the MCP configuration modal. Adapter settin
 - **Node.js** (v18+ recommended)
 - An **LLM API key** (optional)
 
-No `npm install` required for web mode — all client dependencies (Three.js) are loaded via CDN import maps.
+Web mode now also requires `npm install` because the dev server persists state through SQLite.
 
 ---
 
@@ -231,6 +230,7 @@ The desktop app runs fully standalone — no Node.js server needed. LLM proxying
 
 ### Web Mode (Browser)
 ```bash
+npm install
 node server.js
 ```
 Open `http://localhost:8080` in your browser.
@@ -249,10 +249,15 @@ npx playwright test
 ```
 
 ### Unit Coverage Run
-Covers memory flows, Hermes integration, context clearing, proxy auth failures, endpoint validation branches, and server-side coverage for `server.js`.
+Covers direct SQLite persistence tests, migration import tests, Hermes compatibility, context clearing, proxy auth failures, and endpoint validation branches.
 
 ```bash
 npm run coverage:unit
+```
+
+### Tauri Persistence Tests
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
 For tests that exercise the LLM proxy endpoint, start the server on port 3000 first:
@@ -264,12 +269,12 @@ node test-web-fetch.mjs
 
 ## Hermes Integration (dev)
 
-The dev server exposes a minimal Hermes-compatible assignment endpoint and a small persistent memory API useful for local integrations and testing.
+The dev server exposes Hermes-compatible assignment endpoints plus a durable memory API useful for local integrations and testing.
 
 Memory store
-- File: `memories.json` at the project root (created on first write).
-- Behavior: writes are atomic (written to a temp file then renamed) to avoid partial/corrupt files during concurrent updates.
-- Intended use: short-lived test state, task queues, and simple integration testing only. Do not rely on this store for production data or concurrent multi-process deployments.
+- Primary store: local SQLite database (`agent-bar-hangout.db` by default, or `PERSISTENCE_DB_PATH` when set).
+- Legacy import: if `memories.json` exists, it is imported on first startup and recorded in migration metadata.
+- Intended use: local durable state for development and standalone usage. Do not expose the unauthenticated dev server to untrusted networks.
 
 API Endpoints
 - `POST /api/hermes/assign` — Accepts a Hermes-style payload and stores a normalized task object in the memory store. Example body:
@@ -287,7 +292,11 @@ API Endpoints
 
 - `POST /api/memory/get` — Body: `{ key?: string }`. Returns the stored value for `key`, or the full store when `key` is omitted.
 
-- `POST /api/memory/set` — Body: `{ key: string, value: any }`. Persists `value` under `key` in `memories.json`, including `null` values. Setting `value` to `null` keeps the key present with a `null` value; it does not delete the key.
+- `POST /api/memory/set` — Body: `{ key: string, value: any }`. Persists `value` durably, including `null` values. Setting `value` to `null` keeps the key present with a `null` value; it does not delete the key.
+
+- `POST /api/state/bootstrap` — Body: `{ agentIds?: string[] }`. Returns durable active task state, completed history, pending Hermes tasks, and migration info for the UI.
+
+- `POST /api/state/task/upsert` / `POST /api/state/task/transition` / `POST /api/state/task/delete` — Durable task lifecycle endpoints used by the app UI and integration tests.
 
 Examples
 - Assign a Hermes task (curl):
@@ -306,8 +315,9 @@ const data = await res.json();
 ```
 
 Migration & production guidance
-- This file-backed store is a development convenience. For production use prefer a proper database (Postgres/SQLite) or a durable queue.
-- If you need zero-native-deps local persistence, consider `sql.js` (WebAssembly SQLite) or a managed service. Native `better-sqlite3` may require a compatible build toolchain on CI/Windows.
+- The project now uses SQLite for local durability in both runtimes.
+- `better-sqlite3` is a native dependency in web mode, so contributor machines and CI need a compatible Node/native build toolchain.
+- Tauri uses `rusqlite` with bundled SQLite so the desktop app remains standalone.
 
 Security
 - The memory and Hermes endpoints are intentionally unprotected in the dev server. Do not expose the dev server to untrusted networks. Add authentication and authorization before using these endpoints in shared environments.
@@ -330,8 +340,9 @@ Running 69 tests using 1 worker
 -----------|---------|----------|---------|---------|
 File       | % Stmts | % Branch | % Funcs | % Lines |
 -----------|---------|----------|---------|---------|
-All files  |   65.58 |     67.5 |   69.44 |   65.58 |
-server.js  |   65.58 |     67.5 |   69.44 |   65.58 |
+All files       |   76.19 |    68.66 |   83.07 |   76.19 |
+persistence.js  |   93.57 |    69.79 |     100 |   93.57 |
+server.js       |   65.92 |    67.94 |   71.05 |   65.92 |
 -----------|---------|----------|---------|---------|
 ```
 
@@ -409,7 +420,7 @@ curl http://localhost:8080/health
 1. **Select an agent** by clicking their card in the roster or clicking them in the 3D scene. Use arrow keys to cycle.
 2. **Assign a task** using the task form — enter a title, instructions, pick an MCP adapter, and set an ETA.
 3. **Watch progress** in the Active Tasks panel as the agent works through the pipeline steps.
-4. **View results** in the Agent Output pane and Run History panel.
+4. **View results** in the Agent Output pane and Activity Log.
 5. **Configure adapters** via the MCP Configuration button — add API keys, endpoints, or create custom adapters.
 
 ---
