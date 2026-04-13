@@ -1,7 +1,9 @@
 import { test, expect } from '@playwright/test';
 
 test.beforeEach(async ({ request }) => {
-  const response = await request.post('/api/test/reset');
+  const response = await request.post('/api/test/reset', {
+    headers: { 'x-test-api-token': process.env.TEST_API_TOKEN || '' },
+  });
   expect(response.ok()).toBeTruthy();
 });
 
@@ -629,7 +631,7 @@ test.describe('Activity log download', () => {
     expect(parsed[0]).toHaveProperty('details');
   });
 
-  test('persisted run record truncates oversized instructions and result fields', async ({ page }) => {
+  test('stores full-length instructions in both in-memory and persisted run history', async ({ page, request }) => {
     await page.goto('/');
     await waitForScene(page);
 
@@ -644,7 +646,7 @@ test.describe('Activity log download', () => {
 
     await page.locator('.task-card [data-action="done"]').first().click();
 
-    // Verify the agent's in-memory history reflects the completed task
+    // Verify the agent's in-memory history reflects the completed task with full-length instructions
     const historyEntry = await page.evaluate(() => {
       const agent = window.__agentBarState.agents.find((entry) => entry.id === 'nova');
       return agent?.history[0] || null;
@@ -652,8 +654,22 @@ test.describe('Activity log download', () => {
 
     expect(historyEntry).not.toBeNull();
     expect(historyEntry.title).toBe('Truncate persisted run record');
-    // Instructions are stored at full length in the in-memory history (no truncation in memory)
+    // Instructions are stored at full 520-char length in the in-memory history (no truncation)
     expect(historyEntry.instructions).toBe('I'.repeat(520));
+    expect(historyEntry.instructions).toHaveLength(520);
+
+    // Also verify the persistence layer round-trips the full-length instructions
+    const bootstrapResp = await request.post('/api/state/bootstrap', {
+      data: { agentIds: ['nova'] },
+    });
+    expect(bootstrapResp.ok()).toBeTruthy();
+    const bootstrap = await bootstrapResp.json();
+    const novaHistory = bootstrap.agents?.find((a) => a.agentId === 'nova')?.history || [];
+    const persistedEntry = novaHistory.find((t) => t.title === 'Truncate persisted run record');
+    expect(persistedEntry).not.toBeNull();
+    // Persisted instructions must also be the full 520 chars, not truncated
+    expect(persistedEntry.instructions).toBe('I'.repeat(520));
+    expect(persistedEntry.instructions).toHaveLength(520);
   });
 });
 

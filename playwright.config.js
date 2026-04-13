@@ -6,6 +6,13 @@ const rootDir = path.dirname(fileURLToPath(import.meta.url));
 const testDbPath = path.join(rootDir, 'coverage', 'playwright.db');
 const testMemoryPath = path.join(rootDir, 'coverage', 'playwright-memories.json');
 
+// Fixed token used by both the webServer and test workers to authenticate
+// calls to the test-only /api/test/reset endpoint.
+const TEST_API_TOKEN = 'playwright-reset-token';
+// Expose it to Playwright worker processes via process.env so test files
+// can reference process.env.TEST_API_TOKEN without hardcoding the value.
+process.env.TEST_API_TOKEN = TEST_API_TOKEN;
+
 export default defineConfig({
   testDir: './tests',
   testIgnore: ['tests/unit/**'],
@@ -28,6 +35,7 @@ export default defineConfig({
       ...process.env,
       PORT: '4173',
       ENABLE_TEST_API: '1',
+      TEST_API_TOKEN: TEST_API_TOKEN,
       PERSISTENCE_DB_PATH: testDbPath,
       PERSISTENCE_MEMORY_FILE_PATH: testMemoryPath,
     },

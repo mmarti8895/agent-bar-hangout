@@ -18,6 +18,7 @@ import { createPersistence } from './persistence.js';
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PORT = process.env.PORT || 8080;
 const ENABLE_TEST_API = process.env.ENABLE_TEST_API === '1';
+const TEST_API_TOKEN = process.env.TEST_API_TOKEN || '';
 
 /* ───── Load .env ───── */
 let OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
@@ -239,6 +240,11 @@ async function handleTestReset(req, res) {
   const rawAddr = req.socket.remoteAddress || '';
   const remoteAddr = rawAddr.replace(/^::ffff:/i, '');
   if (remoteAddr !== '::1' && !remoteAddr.startsWith('127.')) {
+    return jsonResponse(res, 403, { error: 'Forbidden' });
+  }
+  // Require a secret token header when one is configured to prevent CSRF from
+  // malicious local pages that can issue same-origin cross-site requests.
+  if (TEST_API_TOKEN && req.headers['x-test-api-token'] !== TEST_API_TOKEN) {
     return jsonResponse(res, 403, { error: 'Forbidden' });
   }
   try {
