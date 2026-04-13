@@ -1,5 +1,10 @@
 import { test, expect } from '@playwright/test';
 
+test.beforeEach(async ({ request }) => {
+  const response = await request.post('/api/test/reset');
+  expect(response.ok()).toBeTruthy();
+});
+
 // E2E: Hermes UI Accept/Reject flow
 test.describe('Hermes UI flows', () => {
   test('Accepting and rejecting Hermes tasks via UI', async ({ page, request }) => {

@@ -1,0 +1,12 @@
+
+Running 76 tests using 1 worker
+
+  Γ£ô   1 tests\app.spec.js:34:3 ΓÇ║ Page load ΓÇ║ page has correct title (1.8s)
+  Γ£ô   2 tests\app.spec.js:38:3 ΓÇ║ Page load ΓÇ║ all major sections are visible (1.9s)
+  Γ£ô   3 tests\app.spec.js:47:3 ΓÇ║ Page load ΓÇ║ roster grid has exactly 4 agent buttons (1.8s)
+  Γ£ô   4 tests\app.spec.js:52:3 ΓÇ║ Page load ΓÇ║ canvas renders (non-zero size) (3.8s)
+  Γ£ô   5 tests\app.spec.js:69:3 ΓÇ║ Agent selection ΓÇ║ first agent (Nova) is selected by default (4.2s)
+  Γ£ô   6 tests\app.spec.js:76:3 ΓÇ║ Agent selection ΓÇ║ clicking a roster button selects that agent (6.2s)
+  Γ£ô   7 tests\app.spec.js:90:3 ΓÇ║ Agent selection ΓÇ║ arrow keys cycle through agents (6.9s)
+  Γ£ô   8 tests\app.spec.js:113:3 ΓÇ║ Agent selection ΓÇ║ each agent shows correct role (8.9s)
+  Γ£ô   9 tests\app.spec.js:136:3 ΓÇ║ Task assignment form ΓÇ║ form has required fields (4.2s)

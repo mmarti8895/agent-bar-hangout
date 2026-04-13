@@ -17,9 +17,13 @@ import { createPersistence } from './persistence.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PORT = process.env.PORT || 8080;
+const ENABLE_TEST_API = process.env.ENABLE_TEST_API === '1';
+const TEST_API_TOKEN = process.env.TEST_API_TOKEN || '';
 
 /* ───── Load .env ───── */
 let OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
+let OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+let OPENAI_API_BASE = process.env.OPENAI_API_BASE || 'https://api.openai.com/v1';
 try {
   const envText = await readFile(join(__dirname, '.env'), 'utf-8');
   for (const line of envText.split('\n')) {
@@ -30,6 +34,8 @@ try {
     const key = trimmed.slice(0, eq).trim();
     const val = trimmed.slice(eq + 1).trim();
     if (key === 'OPENAI_API_KEY' && val) OPENAI_API_KEY = val;
+    if (key === 'OPENAI_MODEL' && val) OPENAI_MODEL = val;
+    if (key === 'OPENAI_API_BASE' && val) OPENAI_API_BASE = val;
   }
 } catch { /* no .env file */ }
 
@@ -225,6 +231,31 @@ async function handleStateTaskDelete(req, res) {
   }
 }
 
+async function handleTestReset(req, res) {
+  if (!ENABLE_TEST_API) {
+    return jsonResponse(res, 404, { error: 'Not found' });
+  }
+  // Only allow requests from the loopback interface to prevent accidental exposure.
+  // Strip any IPv4-mapped IPv6 prefix (e.g. '::ffff:127.0.0.1') before comparing.
+  const rawAddr = req.socket.remoteAddress || '';
+  const remoteAddr = rawAddr.replace(/^::ffff:/i, '');
+  if (remoteAddr !== '::1' && !remoteAddr.startsWith('127.')) {
+    return jsonResponse(res, 403, { error: 'Forbidden' });
+  }
+  // Require a secret token header when one is configured to prevent CSRF from
+  // malicious local pages that can issue requests to localhost.
+  if (TEST_API_TOKEN && req.headers['x-test-api-token'] !== TEST_API_TOKEN) {
+    return jsonResponse(res, 403, { error: 'Forbidden' });
+  }
+  try {
+    persistence.clearAllState();
+    agentContexts.clear();
+    return jsonResponse(res, 200, { ok: true });
+  } catch (e) {
+    return jsonResponse(res, 500, { error: e.message });
+  }
+}
+
 /* ───── LLM proxy (multi-vendor) ───── */
 async function handleChatProxy(req, res) {
   let body = '';
@@ -310,7 +341,7 @@ async function handleChatProxy(req, res) {
     res.end(JSON.stringify({ answer, vendor: effectiveVendor, contextEntries: ctxCount }));
   } catch (e) {
     res.writeHead(502, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'LLM request failed: ' + e.message }));
+    res.end(JSON.stringify({ error: 'LLM request failed: ' + sanitizeSecretText(e.message) }));
   }
 }
 
@@ -326,27 +357,44 @@ function buildMessages(systemPrompt, ctx, prompt) {
 
 /* ─── OpenAI / ChatGPT ─── */
 async function callOpenAI(systemPrompt, ctx, prompt, vc) {
-  const apiKey = vc.apiKey || OPENAI_API_KEY;
-  if (!apiKey) throw new Error('OpenAI API key not configured');
+  const apiKeys = Array.from(new Set([vc.apiKey, OPENAI_API_KEY].filter(Boolean)));
+  if (!apiKeys.length) throw new Error('OpenAI API key not configured');
+  const apiBase = (OPENAI_API_BASE || 'https://api.openai.com/v1').replace(/\/+$/, '');
   const messages = buildMessages(systemPrompt, ctx, prompt);
-  const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey };
-  if (vc.orgId) headers['OpenAI-Organization'] = vc.orgId;
 
   // Some newer OpenAI models (and API versions) expect `max_completion_tokens`
   // instead of `max_tokens`. Use `vc.max_completion_tokens` if provided,
   // otherwise default to 1024. This avoids 400 errors like:
   // Unsupported parameter: 'max_tokens' is not supported with this model.
-  const payload = { model: vc.model || 'gpt-4o-mini', messages, temperature: 0.7 };
+  const payload = { model: vc.model || OPENAI_MODEL || 'gpt-4o-mini', messages, temperature: 0.7 };
   if (vc.max_completion_tokens !== undefined) payload.max_completion_tokens = vc.max_completion_tokens;
   else payload.max_completion_tokens = 1024;
 
-  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST', headers,
-    body: JSON.stringify(payload),
-  });
-  if (!resp.ok) throw new Error('OpenAI HTTP ' + resp.status + ': ' + await resp.text());
-  const data = await resp.json();
-  return data.choices?.[0]?.message?.content || 'No response from OpenAI.';
+  let lastError = null;
+  for (let i = 0; i < apiKeys.length; i++) {
+    const apiKey = apiKeys[i];
+    const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey };
+    if (vc.orgId) headers['OpenAI-Organization'] = vc.orgId;
+
+    const resp = await fetch(apiBase + '/chat/completions', {
+      method: 'POST', headers,
+      body: JSON.stringify(payload),
+    });
+
+    if (resp.ok) {
+      const data = await resp.json();
+      return data.choices?.[0]?.message?.content || 'No response from OpenAI.';
+    }
+
+    const rawError = await resp.text();
+    lastError = new Error('OpenAI HTTP ' + resp.status + ': ' + sanitizeSecretText(rawError));
+
+    // Try next key (typically .env key) if the current one is unauthorized.
+    if (resp.status === 401 && i < apiKeys.length - 1) continue;
+    throw lastError;
+  }
+
+  throw lastError || new Error('OpenAI request failed');
 }
 
 /* ─── Anthropic / Claude ─── */
@@ -598,6 +646,13 @@ function jsonResponse(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
+function sanitizeSecretText(value) {
+  if (!value) return value;
+  return String(value)
+    .replace(/sk-[A-Za-z0-9_-]{12,}/g, 'sk-***')
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer ***');
+}
+
 /* Slack API proxy */
 async function handleSlackProxy(req, res) {
   const { botToken, action, channel, text, query } = await readBody(req);
@@ -802,6 +857,11 @@ const server = createServer((req, res) => {
 
   if (req.method === 'POST' && req.url === '/api/state/task/delete') {
     handleStateTaskDelete(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/test/reset') {
+    handleTestReset(req, res);
     return;
   }
 

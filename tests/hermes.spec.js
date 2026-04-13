@@ -1,5 +1,10 @@
 import { test, expect } from '@playwright/test';
 
+test.beforeEach(async ({ request }) => {
+  const response = await request.post('/api/test/reset');
+  expect(response.ok()).toBeTruthy();
+});
+
 test.describe('Hermes integration (E2E)', () => {
   test('incoming Hermes task appears and can be accepted', async ({ page, request }) => {
     // Start on the main page

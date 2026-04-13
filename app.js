@@ -231,6 +231,30 @@ function applyBootstrapState(bootstrap) {
   syncAgentTaskState();
 }
 
+function resumeBootstrappedTasks() {
+  const pendingTasks = [];
+
+  state.agents.forEach((agent) => {
+    (agent.tasks || []).forEach((task) => {
+      if (task.status === 'done') return;
+      pendingTasks.push({ agent, task });
+    });
+  });
+
+  if (!pendingTasks.length) return;
+
+  const shouldResume = window.confirm(
+    `Resume ${pendingTasks.length} unfinished task${pendingTasks.length === 1 ? '' : 's'} from a previous session?\n\n` +
+    'Resuming may repeat external actions, including API-backed chat requests.'
+  );
+
+  if (!shouldResume) return;
+
+  pendingTasks.forEach(({ agent, task }) => {
+    runTaskExecution(agent, task);
+  });
+}
+
 /* ───────── MCP Adapter Registry ───────── */
 const defaultMcpAdapters = [
   {
@@ -1368,20 +1392,20 @@ function formatDownloadTimestamp(date) {
     pad(date.getSeconds());
 }
 
-async function downloadActivityLog() {
-  if (!activityLogEntries.length) {
-    pushToast('No activity log to download yet.');
+async function downloadJsonPayload(payload, filename, emptyMessage, clipboardMessage) {
+  if (!payload.length) {
+    pushToast(emptyMessage);
     return;
   }
 
-  const payload = JSON.stringify(activityLogEntries, null, 2);
+  const serialized = JSON.stringify(payload, null, 2);
 
   try {
-    const blob = new Blob([payload], { type: 'application/json' });
+    const blob = new Blob([serialized], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'activity_log_' + formatDownloadTimestamp(new Date()) + '.json';
+    link.download = filename;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -1393,8 +1417,8 @@ async function downloadActivityLog() {
 
   if (navigator.clipboard && navigator.clipboard.writeText) {
     try {
-      await navigator.clipboard.writeText(payload);
-      pushToast('Download unavailable here. Activity log copied to clipboard.');
+      await navigator.clipboard.writeText(serialized);
+      pushToast(clipboardMessage);
       return;
     } catch {
       // Fall through to final toast.
@@ -1402,6 +1426,15 @@ async function downloadActivityLog() {
   }
 
   pushToast('Could not export activity log in this environment.');
+}
+
+async function downloadActivityLog() {
+  return downloadJsonPayload(
+    activityLogEntries,
+    'activity_log_' + formatDownloadTimestamp(new Date()) + '.json',
+    'No activity log to download yet.',
+    'Download unavailable here. Activity log copied to clipboard.',
+  );
 }
 
 function renderTaskList(listElement, tasks, emptyMessage, showActions) {
@@ -3760,6 +3793,7 @@ async function init() {
   document.addEventListener('keydown', handleKeyNavigation);
   // Start polling for incoming Hermes tasks (integration compatibility)
   startHermesPolling();
+  resumeBootstrappedTasks();
   if (bootstrap?.migration?.status === 'failed') {
     pushToast('Stored state could not be fully restored.');
   }

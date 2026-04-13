@@ -1,5 +1,12 @@
 import { test, expect } from '@playwright/test';
 
+test.beforeEach(async ({ request }) => {
+  const response = await request.post('/api/test/reset', {
+    headers: { 'x-test-api-token': process.env.TEST_API_TOKEN || '' },
+  });
+  expect(response.ok()).toBeTruthy();
+});
+
 /* ──────────────────────────────────────────────────
    Helper: wait for Three.js scene to initialise
    ────────────────────────────────────────────────── */
@@ -598,6 +605,8 @@ test.describe('Activity log download', () => {
   test('run history section is removed', async ({ page }) => {
     await page.goto('/');
     await expect(page.locator('#historyList')).toHaveCount(0);
+    await expect(page.locator('#clearRunHistory')).toHaveCount(0);
+    await expect(page.locator('#downloadRunHistory')).toHaveCount(0);
   });
 
   test('downloaded activity log json contains entries', async ({ page }) => {
@@ -622,35 +631,45 @@ test.describe('Activity log download', () => {
     expect(parsed[0]).toHaveProperty('details');
   });
 
-  test('persisted run record truncates oversized instructions and result fields', async ({ page }) => {
+  test('stores full-length instructions in both in-memory and persisted run history', async ({ page, request }) => {
     await page.goto('/');
     await waitForScene(page);
 
     const longInstructions = 'I'.repeat(520);
-    const longResult = 'R'.repeat(520);
 
     await page.locator('#taskTitle').fill('Truncate persisted run record');
     await page.locator('#taskInstructions').fill(longInstructions);
     await page.locator('#assignForm button[type="submit"]').click();
 
-    await page.evaluate((resultMessage) => {
-      const agent = window.__agentBarState.agents.find((entry) => entry.id === 'nova');
-      const task = agent?.tasks.find((entry) => entry.label === 'Truncate persisted run record');
-      if (!task) throw new Error('Expected active task for truncation test');
-      task.log = [{ type: 'result', message: resultMessage }];
-    }, longResult);
+    // Wait for the task card to appear before marking done
+    await expect(page.locator('.task-card').first()).toBeVisible({ timeout: 5000 });
 
     await page.locator('.task-card [data-action="done"]').first().click();
-    await expect(page.locator('#historyList')).toContainText('Truncate persisted run record');
 
-    const record = await page.evaluate(() => {
-      const raw = localStorage.getItem('agentBarHangout_runHistory');
-      if (!raw) return null;
-      return JSON.parse(raw)[0] || null;
+    // Verify the agent's in-memory history reflects the completed task with full-length instructions
+    const historyEntry = await page.evaluate(() => {
+      const agent = window.__agentBarState.agents.find((entry) => entry.id === 'nova');
+      return agent?.history[0] || null;
     });
 
-    expect(record.instructions).toBe(longInstructions.slice(0, 500) + '…');
-    expect(record.result).toBe(longResult.slice(0, 500) + '…');
+    expect(historyEntry).not.toBeNull();
+    expect(historyEntry.title).toBe('Truncate persisted run record');
+    // Instructions are stored at full 520-char length in the in-memory history (no truncation)
+    expect(historyEntry.instructions).toBe('I'.repeat(520));
+    expect(historyEntry.instructions).toHaveLength(520);
+
+    // Also verify the persistence layer round-trips the full-length instructions
+    const bootstrapResp = await request.post('/api/state/bootstrap', {
+      data: { agentIds: ['nova'] },
+    });
+    expect(bootstrapResp.ok()).toBeTruthy();
+    const bootstrap = await bootstrapResp.json();
+    const novaHistory = bootstrap.agents?.find((a) => a.agentId === 'nova')?.history || [];
+    const persistedEntry = novaHistory.find((t) => t.title === 'Truncate persisted run record');
+    expect(persistedEntry).toBeDefined();
+    // Persisted instructions must also be the full 520 chars, not truncated
+    expect(persistedEntry.instructions).toBe('I'.repeat(520));
+    expect(persistedEntry.instructions).toHaveLength(520);
   });
 });
 
@@ -910,7 +929,7 @@ test.describe('Agent walk animations', () => {
     const doneBtn = page.locator('.task-card [data-action="done"]');
     await expect(doneBtn.first()).toBeVisible({ timeout: 5000 });
     await doneBtn.first().click();
-    await page.waitForTimeout(100);
+    await waitForWalkState(page, 'nova', 'returning', 5000);
 
     const info = await getWalkInfo(page, 'nova');
     expect(info.walkState).toBe('returning');
@@ -984,7 +1003,9 @@ test.describe('Agent walk animations', () => {
     await forceCheckAdapter(page, 'terminal');
     await page.locator('#taskTitle').fill('Quinn walks');
     await page.locator('#assignForm button[type="submit"]').click();
-    await page.waitForTimeout(50);
+
+    // Wait for Quinn to transition to leaving rather than using a fixed timeout
+    await waitForWalkState(page, 'quinn', 'leaving', 5000);
 
     const quinnInfo = await getWalkInfo(page, 'quinn');
     expect(quinnInfo.walkState).toBe('leaving');

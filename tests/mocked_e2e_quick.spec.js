@@ -11,6 +11,11 @@ test('quick mocked task assignment updates UI without LLM', async ({ page, reque
   }
 
   if (serverAvailable) {
+    // Reset server state before running so prior test data doesn't bleed through
+    const resetResponse = await request.post('/api/test/reset', {
+      headers: { 'x-test-api-token': process.env.TEST_API_TOKEN || '' },
+    });
+    expect(resetResponse.ok()).toBeTruthy();
     // Stub only the LLM/hard endpoints so test runs fast
     await page.route('**/api/chat', route => route.fulfill({ status: 200, body: JSON.stringify({ answer: 'mocked answer' }), headers: { 'Content-Type': 'application/json' } }));
     await page.goto('/');
