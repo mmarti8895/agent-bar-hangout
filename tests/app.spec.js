@@ -600,11 +600,11 @@ test.describe('Server API', () => {
    12. ACTIVITY LOG DOWNLOAD
    ═══════════════════════════════════════════════════ */
 test.describe('Activity log download', () => {
-  test('run history section is visible', async ({ page }) => {
+  test('run history section is removed', async ({ page }) => {
     await page.goto('/');
-    await expect(page.locator('#historyList')).toBeVisible();
-    await expect(page.locator('#clearRunHistory')).toBeVisible();
-    await expect(page.locator('#downloadRunHistory')).toBeVisible();
+    await expect(page.locator('#historyList')).toHaveCount(0);
+    await expect(page.locator('#clearRunHistory')).toHaveCount(0);
+    await expect(page.locator('#downloadRunHistory')).toHaveCount(0);
   });
 
   test('downloaded activity log json contains entries', async ({ page }) => {
@@ -643,7 +643,6 @@ test.describe('Activity log download', () => {
     await expect(page.locator('.task-card').first()).toBeVisible({ timeout: 5000 });
 
     await page.locator('.task-card [data-action="done"]').first().click();
-    await expect(page.locator('#historyList')).toContainText('Truncate persisted run record');
 
     // Verify the agent's in-memory history reflects the completed task
     const historyEntry = await page.evaluate(() => {

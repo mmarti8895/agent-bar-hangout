@@ -31,9 +31,6 @@ const dom = {
   clearResponsePane: document.getElementById('clearResponsePane'),
   activityLogBody: document.getElementById('activityLogBody'),
   logCount: document.getElementById('logCount'),
-  historyList: document.getElementById('historyList'),
-  clearRunHistory: document.getElementById('clearRunHistory'),
-  downloadRunHistory: document.getElementById('downloadRunHistory'),
   agentOutputPane: document.getElementById('agentOutputPane'),
   agentOutputLabel: document.getElementById('agentOutputLabel'),
   clearAgentOutput: document.getElementById('clearAgentOutput'),
@@ -232,6 +229,15 @@ function applyBootstrapState(bootstrap) {
     agent.history = (restored?.history || []).map(hydrateTask);
   });
   syncAgentTaskState();
+}
+
+function resumeBootstrappedTasks() {
+  state.agents.forEach((agent) => {
+    (agent.tasks || []).forEach((task) => {
+      if (task.status === 'done') return;
+      runTaskExecution(agent, task);
+    });
+  });
 }
 
 /* ───────── MCP Adapter Registry ───────── */
@@ -1349,7 +1355,6 @@ function renderSidebar() {
     dom.selectedMood.textContent = 'Mood —';
     dom.selectedStatus.textContent = 'Status —';
     renderTaskList(dom.taskList, [], 'Select an agent to assign work.', true);
-    renderTaskList(dom.historyList, [], 'No recent runs.', false);
     dom.activeSummary.textContent = '0 tasks';
     return;
   }
@@ -1359,7 +1364,6 @@ function renderSidebar() {
   const statusLabel = agent.tasks.length ? 'Busy' : 'Idle';
   dom.selectedStatus.textContent = 'Status ' + statusLabel;
   renderTaskList(dom.taskList, agent.tasks, 'No active tasks.', true);
-  renderTaskList(dom.historyList, agent.history.slice(0, 10), 'No recent runs.', false);
   dom.activeSummary.textContent = agent.tasks.length ? agent.tasks.length + ' task(s)' : 'No active tasks';
 }
 
@@ -1416,34 +1420,6 @@ async function downloadActivityLog() {
     'No activity log to download yet.',
     'Download unavailable here. Activity log copied to clipboard.',
   );
-}
-
-async function downloadRunHistory() {
-  const agent = getSelectedAgent();
-  const history = agent ? agent.history.slice(0, 10) : [];
-  return downloadJsonPayload(
-    history,
-    'run_history_' + formatDownloadTimestamp(new Date()) + '.json',
-    'No run history to download yet.',
-    'Download unavailable here. Run history copied to clipboard.',
-  );
-}
-
-async function clearSelectedAgentRunHistory() {
-  const agent = getSelectedAgent();
-  if (!agent || !agent.history.length) {
-    pushToast('No run history to clear.');
-    return;
-  }
-
-  try {
-    await Promise.all(agent.history.map((task) => persistenceGateway.deleteTask(task.id)));
-    agent.history = [];
-    renderSidebar();
-    pushToast(agent.name + ' run history cleared.');
-  } catch (_) {
-    pushToast('Could not clear run history right now.');
-  }
 }
 
 function renderTaskList(listElement, tasks, emptyMessage, showActions) {
@@ -3772,16 +3748,6 @@ async function init() {
   if (dom.downloadLogBtn) {
     dom.downloadLogBtn.addEventListener('click', downloadActivityLog);
   }
-  if (dom.downloadRunHistory) {
-    dom.downloadRunHistory.addEventListener('click', () => {
-      downloadRunHistory().catch(() => {});
-    });
-  }
-  if (dom.clearRunHistory) {
-    dom.clearRunHistory.addEventListener('click', () => {
-      clearSelectedAgentRunHistory().catch(() => {});
-    });
-  }
   dom.clearAgentOutput.addEventListener('click', () => {
     dom.agentOutputPane.innerHTML = '';
     agentOutputCount = 0;
@@ -3812,6 +3778,7 @@ async function init() {
   document.addEventListener('keydown', handleKeyNavigation);
   // Start polling for incoming Hermes tasks (integration compatibility)
   startHermesPolling();
+  resumeBootstrappedTasks();
   if (bootstrap?.migration?.status === 'failed') {
     pushToast('Stored state could not be fully restored.');
   }
