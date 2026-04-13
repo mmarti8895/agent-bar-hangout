@@ -336,6 +336,7 @@ export function createPersistence(options = {}) {
   function clearAllState() {
     clearMemoryStore();
     database.prepare('DELETE FROM tasks').run();
+    database.prepare('DELETE FROM migration_records WHERE migration_key = ?').run(MIGRATION_KEY);
   }
 
   function upsertTask(task) {
