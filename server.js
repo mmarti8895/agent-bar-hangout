@@ -230,9 +230,16 @@ async function handleStateTaskDelete(req, res) {
   }
 }
 
-async function handleTestReset(_req, res) {
+async function handleTestReset(req, res) {
   if (!ENABLE_TEST_API) {
     return jsonResponse(res, 404, { error: 'Not found' });
+  }
+  // Only allow requests from the loopback interface to prevent accidental exposure.
+  // Strip any IPv4-mapped IPv6 prefix (e.g. '::ffff:127.0.0.1') before comparing.
+  const rawAddr = req.socket.remoteAddress || '';
+  const remoteAddr = rawAddr.replace(/^::ffff:/i, '');
+  if (remoteAddr !== '::1' && !remoteAddr.startsWith('127.')) {
+    return jsonResponse(res, 403, { error: 'Forbidden' });
   }
   try {
     persistence.clearAllState();
