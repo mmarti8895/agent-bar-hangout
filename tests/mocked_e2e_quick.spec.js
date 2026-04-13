@@ -1,10 +1,5 @@
 import { test, expect } from '@playwright/test';
 
-test.beforeEach(async ({ request }) => {
-  const response = await request.post('/api/test/reset');
-  expect(response.ok()).toBeTruthy();
-});
-
 test('quick mocked task assignment updates UI without LLM', async ({ page, request }) => {
   // If server is reachable, run against server but still stub heavy LLM call. If not, fully mock UI.
   let serverAvailable = false;
@@ -16,6 +11,9 @@ test('quick mocked task assignment updates UI without LLM', async ({ page, reque
   }
 
   if (serverAvailable) {
+    // Reset server state before running so prior test data doesn't bleed through
+    const resetResponse = await request.post('/api/test/reset');
+    expect(resetResponse.ok()).toBeTruthy();
     // Stub only the LLM/hard endpoints so test runs fast
     await page.route('**/api/chat', route => route.fulfill({ status: 200, body: JSON.stringify({ answer: 'mocked answer' }), headers: { 'Content-Type': 'application/json' } }));
     await page.goto('/');

@@ -226,9 +226,14 @@ async function handleStateTaskDelete(req, res) {
   }
 }
 
-async function handleTestReset(_req, res) {
+async function handleTestReset(req, res) {
   if (!ENABLE_TEST_API) {
     return jsonResponse(res, 404, { error: 'Not found' });
+  }
+  // Only allow requests from the loopback interface to prevent accidental exposure
+  const remoteAddr = req.socket.remoteAddress;
+  if (remoteAddr !== '127.0.0.1' && remoteAddr !== '::1' && remoteAddr !== '::ffff:127.0.0.1') {
+    return jsonResponse(res, 403, { error: 'Forbidden' });
   }
   try {
     persistence.clearAllState();

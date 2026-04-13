@@ -653,8 +653,8 @@ test.describe('Activity log download', () => {
 
     expect(historyEntry).not.toBeNull();
     expect(historyEntry.title).toBe('Truncate persisted run record');
-    // Instructions are stored as-given in the in-memory history; truncation is a persistence-layer concern
-    expect(historyEntry.instructions.startsWith('I'.repeat(500))).toBeTruthy();
+    // Instructions are stored at full length in the in-memory history (no truncation in memory)
+    expect(historyEntry.instructions).toBe('I'.repeat(520));
   });
 });
 
