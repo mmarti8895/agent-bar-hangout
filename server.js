@@ -243,7 +243,7 @@ async function handleTestReset(req, res) {
     return jsonResponse(res, 403, { error: 'Forbidden' });
   }
   // Require a secret token header when one is configured to prevent CSRF from
-  // malicious local pages that can issue same-origin cross-site requests.
+  // malicious local pages that can issue requests to localhost.
   if (TEST_API_TOKEN && req.headers['x-test-api-token'] !== TEST_API_TOKEN) {
     return jsonResponse(res, 403, { error: 'Forbidden' });
   }

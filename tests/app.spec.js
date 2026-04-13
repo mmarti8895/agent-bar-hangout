@@ -666,7 +666,7 @@ test.describe('Activity log download', () => {
     const bootstrap = await bootstrapResp.json();
     const novaHistory = bootstrap.agents?.find((a) => a.agentId === 'nova')?.history || [];
     const persistedEntry = novaHistory.find((t) => t.title === 'Truncate persisted run record');
-    expect(persistedEntry).not.toBeNull();
+    expect(persistedEntry).toBeDefined();
     // Persisted instructions must also be the full 520 chars, not truncated
     expect(persistedEntry.instructions).toBe('I'.repeat(520));
     expect(persistedEntry.instructions).toHaveLength(520);
