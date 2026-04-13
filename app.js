@@ -232,11 +232,26 @@ function applyBootstrapState(bootstrap) {
 }
 
 function resumeBootstrappedTasks() {
+  const pendingTasks = [];
+
   state.agents.forEach((agent) => {
     (agent.tasks || []).forEach((task) => {
       if (task.status === 'done') return;
-      runTaskExecution(agent, task);
+      pendingTasks.push({ agent, task });
     });
+  });
+
+  if (!pendingTasks.length) return;
+
+  const shouldResume = window.confirm(
+    `Resume ${pendingTasks.length} unfinished task${pendingTasks.length === 1 ? '' : 's'} from a previous session?\n\n` +
+    'Resuming may repeat external actions, including API-backed chat requests.'
+  );
+
+  if (!shouldResume) return;
+
+  pendingTasks.forEach(({ agent, task }) => {
+    runTaskExecution(agent, task);
   });
 }
 
