@@ -1,0 +1,81 @@
+# filepath: /home/mars/Desktop/projects/agent-bar-hangout/docker-compose.yml
+# Docker Compose / Podman Compose configuration for Agent Bar Hangout
+#
+# Usage:
+#   docker compose up              # Start services
+#   docker compose up -d           # Start in detached mode
+#   docker compose down            # Stop services
+#   docker compose logs -f         # View logs
+#
+#   # With Podman:
+#   podman-compose up
+#   podman compose up              # If using podman-compose plugin
+#
+# Environment variables can be set in a .env file
+
+version: "3.8"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: agent-bar-hangout:latest
+    container_name: agent-bar-hangout
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      - NODE_ENV=${NODE_ENV:-production}
+      - PORT=8080
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - OPENAI_API_BASE=${OPENAI_API_BASE:-https://api.openai.com/v1}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - PERSISTENCE_DB_PATH=/app/data/agent-bar-hangout.db
+      - PERSISTENCE_MEMORY_FILE_PATH=/app/data/memories.json
+    volumes:
+      # Persist database and memory files
+      - app-data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    # Security options (works with both Docker and Podman)
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  # Optional: Development mode with hot reload
+  app-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    image: agent-bar-hangout:dev
+    container_name: agent-bar-hangout-dev
+    profiles:
+      - dev
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      - NODE_ENV=development
+      - PORT=8080
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - OPENAI_API_BASE=${OPENAI_API_BASE:-https://api.openai.com/v1}
+    volumes:
+      # Mount source code for development
+      - .:/app:z
+      - /app/node_modules
+    working_dir: /app
+    command: ["node", "server.js"]
+
+volumes:
+  app-data:
+    name: agent-bar-hangout-data

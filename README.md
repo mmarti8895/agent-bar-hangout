@@ -20,6 +20,8 @@ A typical-themed 3D bar where AI "worker agents" hang out waiting for task assig
 - [x] Build scripts for Windows, Linux, and macOS with platform-specific installers
 - [x] Comprehensive documentation (this README, code comments, and additional markdown files for design, agents, assets, and testing)
 - [x] Durable SQLite-backed task history and memory for both web and Tauri runtimes, with Hermes compatibility preserved
+- [ ] Future: integration task changing with openspec tooling for dynamic task updates and agent reactivity to changes in instructions, ETA, or adapter configuration after assignment
+- [ ] Future: integration with real LLM-powered agents through the OpenClaw adapter, allowing users to assign tasks that are processed by AI agents in real-time with dynamic conversation context and response handling
 - [ ] Future: add more MCP adapters, enhance agent animations, implement real-time multi-agent interactions, and explore additional API integrations
 - [ ] Future: add user authentication and multi-user support for shared environments
 - [ ] Future: add more comprehensive error handling and edge case coverage in tests
