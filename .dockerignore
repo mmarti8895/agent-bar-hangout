@@ -1,0 +1,49 @@
+# filepath: /home/mars/Desktop/projects/agent-bar-hangout/.dockerignore
+# Git
+.git
+.gitignore
+
+# Node
+node_modules
+npm-debug.log*
+
+# Tauri / Rust (not needed for web server)
+src-tauri
+*.rs
+Cargo.toml
+Cargo.lock
+
+# Tests
+tests
+temp_tests
+test-results
+coverage
+*.spec.js
+playwright.config.js
+playwright-test.log
+
+# Development files
+.devcontainer
+.github
+.vscode
+*.md
+!README.md
+.env
+.env.*
+*.log
+
+# Build artifacts
+artifacts
+*.db
+*.db-journal
+
+# Specs and docs (not needed at runtime)
+specs
+openspec
+docs
+
+# Misc
+.DS_Store
+Thumbs.db
+*.swp
+*.swo

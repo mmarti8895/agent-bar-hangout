@@ -1122,6 +1122,9 @@ const WALK_SPEED = 0.018;   // progress per frame (~60 fps → ~0.9 s full trans
 const WALK_AWAY_Z = 3.5;    // distance agents walk away from bar
 const SIP_DURATION = 2.5;   // seconds for sip animation
 
+// Configurable execution delay for task pipeline steps (tests can override)
+window.__taskStepDelay = null; // null = use default random delay
+
 /* ───────── Animation loop ───────── */
 const clock = new THREE.Clock();
 
@@ -1637,13 +1640,7 @@ async function addTaskToAgent(agentId, payload) {
     log: payload.log || [],
   });
 
-  try {
-    await persistenceGateway.upsertTask(serializeTaskForPersistence(agent.id, task));
-  } catch (error) {
-    pushToast('Could not save "' + task.label + '" for ' + agent.name + '.');
-    return null;
-  }
-
+  // Apply UI state optimistically before persistence round-trip
   const existingIndex = agent.tasks.findIndex((item) => item.id === task.id);
   if (existingIndex === -1) agent.tasks.push(task);
   else agent.tasks.splice(existingIndex, 1, task);
@@ -1655,6 +1652,22 @@ async function addTaskToAgent(agentId, payload) {
     if (agent.beerMesh) agent.beerMesh.visible = false;
   }
   renderSidebar();
+
+  try {
+    await persistenceGateway.upsertTask(serializeTaskForPersistence(agent.id, task));
+  } catch (error) {
+    // Rollback optimistic UI state on persistence failure
+    const rollbackIndex = agent.tasks.findIndex((item) => item.id === task.id);
+    if (rollbackIndex !== -1) agent.tasks.splice(rollbackIndex, 1);
+    agent.status = agent.tasks.length ? 'busy' : 'idle';
+    if (!agent.tasks.length && agent.walkState === 'leaving') {
+      agent.walkState = 'at-bar';
+      agent.walkProgress = 0;
+    }
+    renderSidebar();
+    pushToast('Could not save "' + task.label + '" for ' + agent.name + '.');
+    return null;
+  }
   const mcpNames = mcpIds.map((id) => {
     const a = mcpAdapters.find((m) => m.id === id);
     return a ? a.name : id;
@@ -1833,7 +1846,7 @@ async function runTaskExecution(agent, task) {
     stepIndex++;
 
     // Random delay (800-2500ms) to simulate real MCP responses
-    const delay = 800 + Math.floor(Math.random() * 1700);
+    const delay = window.__taskStepDelay != null ? window.__taskStepDelay : 800 + Math.floor(Math.random() * 1700);
     setTimeout(() => {
       nextStep().catch(() => {});
     }, delay);
@@ -1842,7 +1855,7 @@ async function runTaskExecution(agent, task) {
   // Kick off after a short initial delay
   setTimeout(() => {
     nextStep().catch(() => {});
-  }, 600);
+  }, window.__taskStepDelay != null ? window.__taskStepDelay : 600);
 }
 
 async function buildExecutionSteps(agent, task) {
