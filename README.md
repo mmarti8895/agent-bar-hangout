@@ -1,3 +1,7 @@
+# !!!! IMPORTANT DISCLAIMER
+Become too unwieldy, added openclaw and hermes and went nuts, rewritting in Rust with strict guardrails. 
+Can't be responsible for agents that lie to get things done. 
+
 # Agent Bar Hangout
 
 > **⚠️ IMPORTANT DISCLAIMER**
